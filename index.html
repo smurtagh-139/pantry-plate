@@ -176,6 +176,9 @@ const MODES=["cook","quick","leftovers","skip"];
 const MODE_LABEL={cook:"Cook",quick:"Quick",leftovers:"Leftovers",skip:"Off"};
 const COURSES=["main","side","sauce","breakfast","dessert","snack","drink"];
 const COURSE_LABEL={main:"Main dish",side:"Side",sauce:"Sauce / base",breakfast:"Breakfast",dessert:"Dessert",snack:"Snack",drink:"Drink"};
+const RATINGS=["favorite","loved","liked","disliked"];
+const RATING_LABEL={favorite:"★ Favorite",loved:"Loved",liked:"Liked",disliked:"Don't make again"};
+const RATING_BONUS={favorite:3,loved:2,liked:0.5};
 const DEFAULTS={budget:25,household:4,quickMax:25,defaultPrice:2,limits:[{what:"chicken",max:2}],
   days:{Mon:"cook",Tue:"quick",Wed:"cook",Thu:"leftovers",Fri:"cook",Sat:"cook",Sun:"cook"}};
 
@@ -236,6 +239,26 @@ function pantryMap(){const m={};for(const it of Object.values(S.items)){m[norm(i
 function priceOf(name){const it=S.items[slug(name)];const st=settings();return it&&it.price!=null&&it.price!==""?Number(it.price):st.defaultPrice}
 function scaled(r,eaters){const n=Math.max(1,eaters);const serves=Number(r.serves)||householdSize();const f=n/serves;const need={};for(const [k,q] of Object.entries(r.ingredients||{})){need[norm(k)]=Math.round((Number(q)||1)*f*100)/100}return need}
 /* what other weeks' still-to-cook meals will use up (and what their unbought lists will add) */
+/* ---------- new recipe night: one cook night a week left open for something new ---------- */
+function ideasPerWeek(){const v=settings().newPerWeek;return v===undefined||v===""?1:Math.max(0,Math.min(3,Number(v)||0))}
+function chooseIdeaDays(wk,p,locked,keep){const n=ideasPerWeek();if(!n)return[];
+  const already=Object.values(keep).filter(x=>x&&x.idea).length;const want=n-already;if(want<=0)return[];
+  const prevIdea=(p&&p.days||[]).filter(x=>x.idea&&!keep[x.day]&&!locked[x.day]&&modeFor(p,x.day)==="cook"&&countFor(p,x.day)>0).map(x=>x.day);
+  const order=["Sat","Sun","Fri","Wed","Mon","Thu","Tue"];const out=prevIdea.slice(0,want);
+  for(const d of order){if(out.length>=want)break;if(out.includes(d)||locked[d]||keep[d])continue;if(modeFor(p,d)!=="cook"||countFor(p,d)===0)continue;
+    const nd=DAYS[DAYS.indexOf(d)+1];if(nd&&modeFor(p,nd)==="leftovers")continue;out.push(d)}
+  return out}
+const CUISINES=["mexican","italian","asian","thai","indian","chinese","greek","mediterranean","cajun","bbq","korean","japanese","french","american","southern"];
+function ideaQuery(p,d,seed){
+  const eaters=Object.keys(S.people).length?eatersFor(p,d):[];
+  const MEAT=/chicken|beef|turkey|pork|sausage|bacon|steak|lamb|ham|salmon|shrimp|fish|tilapia|cod|tuna|meatball|tofu|chops?|roast|ribs?/;
+  const proteins=Object.values(S.items).filter(it=>(Number(it.have)||0)>=0.5&&MEAT.test(norm(it.name))&&!/broth|stock|bouillon|sauce/.test(norm(it.name))).map(it=>it.name);
+  const veg=Object.values(S.items).filter(it=>(Number(it.have)||0)>=1&&(it.unit||guessUnit(it.name))==="each").map(it=>it.name);
+  const liked=[];eaters.forEach(e=>(e.likes||[]).forEach(l=>{if(CUISINES.includes(norm(l)))liked.push(norm(l))}));
+  const pick=a=>a.length?a[Math.floor(Math.random()*a.length)]:"";
+  const parts=[pick(proteins)||pick(["chicken","ground beef","pork","shrimp","salmon","sausage"]),Math.random()<0.5?pick(veg):"",pick(liked)||pick(["sheet pan","one pot","skillet","slow cooker",""])].filter(Boolean);
+  return Array.from(new Set(parts)).join(" ")}
+function newIdea(ws,day){updatePlan(ws,p=>{const x=(p.days||[]).find(y=>y.day===day);if(x)x.query=ideaQuery(p,day,Math.random())})}
 function reservedFor(exceptWs){const t=todayStart();const out={};
   for(const [ws,p] of Object.entries(S.plans)){if(ws===exceptWs||!hasDays(p))continue;
     for(const x of p.days){if(!x.need||x.cooked||x.notMade||x.mode==="leftovers"||dateOf(p,x.day)<t)continue;for(const [k,q] of Object.entries(x.need))out[k]=(out[k]||0)+q}
@@ -248,8 +271,9 @@ function planWeek(opt){
   opt=opt||{};const wk=opt.ws||S.viewWeek;const p=opt.plan||S.plans[wk]||null;
   const locked=opt.locked||{},avoid=opt.avoid||{},keep=opt.keep||{};
   const st=settings();
-  const recs=Object.entries(S.recipes).map(([id,r])=>Object.assign({id},r)).filter(r=>!r.course||r.course==="main"||Object.values(locked).includes(r.id));
+  const recs=Object.entries(S.recipes).map(([id,r])=>Object.assign({id},r)).filter(r=>Object.values(locked).includes(r.id)||((!r.course||r.course==="main")&&r.rating!=="disliked"));
   const base=pantryMap();const res=reservedFor(wk);for(const [k,q] of Object.entries(res))base[k]=(base[k]||0)-q;
+  const ideaDays=chooseIdeaDays(wk,p,locked,keep);
   const taken={};Object.entries(locked).forEach(([d,id])=>{taken[id]=d});Object.entries(keep).forEach(([d,x])=>{if(x&&x.rid&&x.mode!=="leftovers")taken[x.rid]=d});
   let best=null;const RUNS=recs.length?300:1;
   for(let run=0;run<RUNS;run++){
@@ -261,6 +285,7 @@ function planWeek(opt){
         if(k.rid&&k.mode!=="leftovers"){used.add(k.rid);const r=S.recipes[k.rid];if(r){const w=words(r);st.limits.forEach(l=>{if(l.what&&hits(w,l.what)){const kk=norm(l.what);counts[kk]=(counts[kk]||0)+1}})}prev={day:d,name:k.name,rid:k.rid,tags:(r&&r.tags)||[]}}else prev=null;
         continue}
       if(mode==="skip"){days.push({day:d,mode});prev=null;continue}
+      if(ideaDays.includes(d)){const old=(p&&p.days||[]).find(y=>y.day===d&&y.idea);days.push({day:d,mode,idea:true,query:(old&&old.query)||ideaQuery(p,d,run)});prev=null;continue}
       if(mode==="leftovers"){days.push({day:d,mode,from:prev?prev.day:null,name:prev?prev.name:null,rid:prev?prev.rid:null});prev=null;continue}
       const eaters=Object.keys(S.people).length?eatersFor(p,d):[];const n=countFor(p,d);
       if(n===0){days.push({day:d,mode,rid:null,nobody:true});prev=null;continue}
@@ -279,7 +304,8 @@ function planWeek(opt){
         const need=scaled(r,portions);const missing={};let cost=0;
         for(const [k,q] of Object.entries(need)){const short=q-(pantry[k]||0);if(short>0){const buy=Math.ceil(short-1e-9);missing[k]=buy;cost+=buy*priceOf(k)}}
         if(cost>budget+1e-9&&!isLocked)continue;
-        let s=scoreRecipe(r,ws,eaters,pantry,prev);
+        if(!isLocked&&r.restUntil&&isoDay(dateIn(wk,d))<r.restUntil)continue;
+        let s=scoreRecipe(r,ws,eaters,pantry,prev)+(RATING_BONUS[r.rating]||0);
         const keys=Object.keys(need);const have=keys.filter(k=>(pantry[k]||0)>=need[k]).length;
         s+=keys.length?3*have/keys.length:0;s-=0.2*cost;if(isLocked)s+=100;
         if(bi.kid.length)s-=2.5*bi.kid.length;
@@ -311,6 +337,7 @@ function lockedOf(p,exceptDay,all){const l={};(p&&p.days||[]).forEach(x=>{if(x.r
 function makeWeek(){if(!Object.keys(S.recipes).length)return;const ws=S.viewWeek,p=S.plans[ws];savePlan(ws,planWeek({ws,plan:p,locked:lockedOf(p,null,false),keep:pastKeep(p)}))}
 function swapDay(ws,day){
   const p=S.plans[ws];if(!p)return;const cur=(p.days||[]).find(x=>x.day===day);
+  if(cur&&cur.idea)return newIdea(ws,day);
   const rej=Object.assign({},p.rejects||{});rej[day]=Array.from(new Set([...(rej[day]||[]),...(cur&&cur.rid?[cur.rid]:[])]));
   const keep=pastKeep(p);delete keep[day];
   const res=planWeek({ws,plan:p,locked:lockedOf(p,day,true),avoid:{[day]:rej[day]},keep});
@@ -330,6 +357,8 @@ function pickChoices(ws,day){
   const usedElse=new Set((p&&p.days||[]).filter(x=>x.day!==day&&x.mode!=="leftovers").map(x=>x.rid));
   return Object.entries(S.recipes).map(([id,r])=>{const w=words(r);const why=[];
     if(r.course&&r.course!=="main")why.push((COURSE_LABEL[r.course]||r.course).toLowerCase()+", not a main dish");
+    if(r.rating==="disliked")why.push("rated don't make again");
+    if(r.restUntil&&isoDay(dateIn(ws,day))<r.restUntil)why.push("taking a break until "+new Date(r.restUntil+"T00:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"}));
     const bi=blockInfo(r,eaters);
     if(bi.allergy.length)why.push(bi.allergy.join(", ")+" "+(bi.allergy.length>1?"are":"is")+" allergic");
     const adults=bi.hard.filter(n=>!bi.allergy.includes(n));if(adults.length)why.push(adults.join(", ")+" won't eat it");
@@ -443,6 +472,14 @@ function renderWeek(){
     else if(!planned)body=`<div class="muted">${mode==="quick"?"Quick meal, "+st.quickMax+" min or less":"Cook night"}</div>`;
     else if(x&&x.nobody)body=`<div class="muted">Nobody's home for dinner</div>`;
     else if(x&&x.mode!==mode)body=`<div class="muted">Changed to ${MODE_LABEL[mode]}. Tap Re-plan, or Pick a meal.</div><div class="acts"><button class="ghost" data-pick="${d}">Pick a meal</button></div>`;
+    else if(x&&x.idea){
+      const q=x.query||"easy family dinner";const enc=encodeURIComponent(q);
+      body=`<div class="meal">New recipe night</div><div class="small muted">Try something new. Idea: <b>${esc(q)}</b> (budget not counted until you add it)</div>
+      <div class="acts"><a class="btn ghost" href="https://www.allrecipes.com/search?q=${enc}" target="_blank" rel="noopener" style="min-height:34px;padding:5px 11px;font-size:.82rem;text-decoration:none;display:inline-flex;align-items:center">Allrecipes</a>
+      <a class="btn ghost" href="https://www.delish.com/search/?q=${enc}" target="_blank" rel="noopener" style="min-height:34px;padding:5px 11px;font-size:.82rem;text-decoration:none;display:inline-flex;align-items:center">Delish</a>
+      <a class="btn ghost" href="https://www.google.com/search?q=${encodeURIComponent(q+" recipe")}" target="_blank" rel="noopener" style="min-height:34px;padding:5px 11px;font-size:.82rem;text-decoration:none;display:inline-flex;align-items:center">Google</a>
+      ${past?"":`<button class="primary" data-ideaadd="${d}" ${S.canWrite?"":"disabled"}>Found one: add it</button><button class="ghost" data-swap="${d}" ${S.canWrite?"":"disabled"}>Another idea</button><button class="ghost" data-pick="${d}" ${S.canWrite?"":"disabled"}>Use one of ours</button>`}</div>`;
+    }
     else if(x&&x.rid){
       const r=S.recipes[x.rid]||{};const miss=Object.entries(x.missing||{});
       body=`<div class="row spread"><div class="meal">${x.locked?'<span class="pin" title="Pinned">● </span>':""}${esc(x.name)}</div>
@@ -450,6 +487,7 @@ function renderWeek(){
       <div class="row small muted" style="gap:6px">${r.minutes?`<span>${esc(r.minutes)} min</span>`:""}${x.eaters?`<span>· for ${x.eaters}</span>`:""}${x.serves?`<span>· ${esc(x.serves)}</span>`:""}${miss.length?`<span>· buy ${miss.map(([k,q])=>esc(qtyLabel(q,k))).join(", ")}</span>`:""}</div>
       ${(()=>{const k=blockInfo(r,Object.keys(S.people).length?eatersFor(p,d):[]).kid;return k.length?`<div class="small" style="color:var(--butter);margin-top:2px">Kid pass: ${esc(k.join(", "))} won't love this one.</div>`:""})()}
       ${r.how?`<p class="how">${esc(r.how)}</p>`:""}
+      ${x.cooked?`<div class="row small" style="gap:5px;margin-top:6px"><span class="muted">How was it?</span>${RATINGS.map(k=>`<button class="chip ${r.rating===k?"cook":""}" data-rate="${esc(x.rid)}|${k}" ${S.canWrite?"":"disabled"}>${RATING_LABEL[k]}</button>`).join("")}</div>`:""}
       <div class="acts">${x.cooked?`<span class="done">✓ Cooked</span>`:x.notMade?`<span class="muted small">Didn't make it</span>`:`<button data-cook="${d}" data-ws="${ws}" ${S.canWrite?"":"disabled"}>Cooked it</button>`}
       ${past?"":`<button class="ghost" data-swap="${d}" ${S.canWrite?"":"disabled"}>Swap</button><button class="ghost" data-pick="${d}" ${S.canWrite?"":"disabled"}>Pick a meal</button><button class="ghost" data-lock="${d}" ${S.canWrite?"":"disabled"}>${x.locked?"Unpin":"Pin"}</button>`}
       <a class="btn ghost" href="${esc(gcalLink(ws,x))}" target="_blank" rel="noopener" style="min-height:34px;padding:5px 11px;font-size:.82rem;text-decoration:none;display:inline-flex;align-items:center">Calendar</a></div>`;
@@ -539,7 +577,7 @@ function renderRecipes(){
   const e=S.edit;let h=`<section>`;
   if(e){
     const r=e.id?S.recipes[e.id]||{}:(e.draft||{});
-    h+=`<div class="card"><h2>${e.id?"Edit recipe":"New recipe"}</h2>${e.draft?`<p class="note" style="margin:8px 0 0">Claude filled this in${e.draft.from?" from "+esc(e.draft.from):""}. Check the amounts, then tap Save.</p>`:""}<form id="recForm" style="display:flex;flex-direction:column;gap:10px;margin-top:10px">
+    h+=`<div class="card"><h2>${e.id?"Edit recipe":"New recipe"}</h2>${e.forDay?`<p class="note" style="margin:8px 0 0">New recipe for ${esc(e.forDay.day)}. Copy the name and the ingredient list from the website (one ingredient per line, like <i>2 lb chicken thighs</i>), add a line or two on how to make it, then Save. It goes on ${esc(e.forDay.day)} and into your recipe book.</p>`:e.draft&&e.draft.from?`<p class="note" style="margin:8px 0 0">Claude filled this in from ${esc(e.draft.from)}. Check the amounts, then tap Save.</p>`:""}<form id="recForm" style="display:flex;flex-direction:column;gap:10px;margin-top:10px">
     <label>Name<input id="rf-name" required value="${esc(r.name||"")}"></label>
     <div class="grid2"><label>Minutes<input id="rf-min" type="number" min="1" inputmode="numeric" value="${esc(r.minutes||"")}" placeholder="30"></label>
     <label>Serves<input id="rf-serves" type="number" min="1" inputmode="numeric" value="${esc(r.serves||st.household)}"></label></div>
@@ -548,6 +586,10 @@ function renderRecipes(){
     <label>Pantry staples it uses (not counted or shopped)<input id="rf-staples" value="${esc((r.staples||[]).join(", "))}" placeholder="salt, chili powder, oil"></label>
     <label>Ingredients, one per line: amount then item<textarea id="rf-ing" placeholder="1 rice&#10;2 eggs&#10;1 onion">${esc(ingText(r))}</textarea></label>
     <label>How to make it<textarea id="rf-how">${esc(r.how||"")}</textarea></label>
+    <div style="display:flex;flex-direction:column;gap:6px"><span class="small muted" style="font-weight:500">How does the family like it?</span>
+    <div class="row" style="gap:6px">${["",...RATINGS].map(k=>`<label style="flex-direction:row;align-items:center;gap:4px;color:var(--ink);font-size:.88rem;font-weight:400"><input type="radio" name="rf-rating" value="${k}" ${(r.rating||"")===k?"checked":""} style="width:18px;min-height:18px;accent-color:var(--accent)">${k?RATING_LABEL[k]:"Not rated"}</label>`).join("")}</div></div>
+    <label>Comments<textarea id="rf-comment" style="min-height:60px" placeholder="e.g. kids loved it; double the sauce; goes with rice">${esc(r.comment||"")}</textarea></label>
+    <label>Take a break from it<select id="rf-rest"><option value="">No break</option>${[2,4,6,8,12].map(w=>`<option value="${w}">${w} weeks from today</option>`).join("")}${r.restUntil?`<option value="keep" selected>Until ${esc(new Date(r.restUntil+"T00:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"}))}</option>`:""}</select></label>
     <div class="row"><button class="primary" ${S.canWrite?"":"disabled"}>Save recipe</button><button type="button" class="ghost" id="rf-cancel">Cancel</button>
     ${e.id?(S.confirm==="rec:"+e.id?`<button type="button" class="danger" id="rf-del2">Yes, delete it</button>`:`<button type="button" class="danger" id="rf-del">Delete</button>`):""}</div></form></div>`;
     return h+`</section>`;
@@ -566,11 +608,12 @@ function renderRecipes(){
   if(!recs.length)h+=`<div class="card empty"><h2>Your recipe book is empty</h2><p>Add the meals your family actually eats. Ingredients go one per line, like <i>2 eggs</i>.</p></div>`;
   const pm=pantryMap();
   for(const [id,r] of recs){
-    const who=blockedBy(r,people);const ing=Object.entries(r.ingredients||{});const have=ing.filter(([k,q])=>(pm[norm(k)]||0)>=q).length;
+    const who=r.rating==="disliked"?"rated don't make again":blockedBy(r,people)?blockedBy(r,people)+" won't eat it":(r.restUntil&&r.restUntil>isoDay(todayStart())?"taking a break until "+new Date(r.restUntil+"T00:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"}):"");
+    const ing=Object.entries(r.ingredients||{});const have=ing.filter(([k,q])=>(pm[norm(k)]||0)>=q).length;
     h+=`<button class="card" data-edit="${esc(id)}" style="text-align:left;border-radius:var(--r);font-weight:400;display:block;width:100%">
     <div class="row spread"><span class="meal">${esc(r.name)}</span><span class="small muted num">${r.minutes?esc(r.minutes)+" min":""}</span></div>
     <div class="row" style="gap:5px;margin-top:4px">${r.course&&r.course!=="main"?`<span class="tag" style="color:var(--butter);border-color:var(--butter)">${esc(COURSE_LABEL[r.course]||r.course)}</span>`:""}${(r.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>
-    <div class="small muted" style="margin-top:6px">${have} of ${ing.length} ingredients on hand${who?` · <span style="color:var(--tomato)">skipped: ${esc(who)} won't eat it</span>`:""}</div></button>`;
+    <div class="small muted" style="margin-top:6px">${r.rating?`<b style="color:${r.rating==="disliked"?"var(--tomato)":"var(--accent)"}">${esc(RATING_LABEL[r.rating])}</b> · `:""}${have} of ${ing.length} ingredients on hand${who?` · <span style="color:var(--tomato)">not planned: ${esc(who)}</span>`:""}</div>${r.comment?`<div class="small" style="margin-top:4px;font-style:italic">“${esc(r.comment)}”</div>`:""}</button>`;
   }
   return h+`</section>`;
 }
@@ -597,6 +640,7 @@ function renderRules(){
   ${Object.keys(S.people).length?`<label>People eating<input value="${Object.keys(S.people).length} (from Family)" disabled></label>`:`<label>People eating<input id="st-household" type="number" min="1" step="1" inputmode="numeric" value="${esc(st.household)}"></label>`}
   <label>Quick night max (min)<input id="st-quick" type="number" min="5" step="5" inputmode="numeric" value="${esc(st.quickMax)}"></label></div>
   <label>Kid passes per week (meals a kid's "won't eat" can be overruled)<input id="st-kidpass" type="number" min="0" max="7" step="1" inputmode="numeric" value="${esc(kidPasses())}"></label>
+  <label>New recipe nights per week (left open to try something from Allrecipes, Delish…)<input id="st-newpw" type="number" min="0" max="3" step="1" inputmode="numeric" value="${esc(ideasPerWeek())}"></label>
   <div class="grid2"><label>Price for items with no price ($)<input id="st-dp" type="number" min="0" step="0.25" inputmode="decimal" value="${esc(st.defaultPrice)}"></label>
   <label>Dinner time (for the calendar)<input id="st-dinner" type="time" value="${esc(st.dinnerTime||"18:00")}"></label></div></div>
   <div class="card"><h2>Usual week</h2><p class="small muted" style="margin:4px 0 10px">Quick for lessons and practice nights. Leftovers eats the day before's meal, and that day's recipe is doubled.</p>
@@ -684,6 +728,7 @@ function readImport(text){
       ing[n]=Math.round(((ing[n]||0)+q)*100)/100;if(u)units[n]=normUnit(String(u));if(Number(i.price_each)>0)prices[n]=Math.round(Number(i.price_each)*100)/100});
     const r={name:String(x.name).trim().slice(0,80),course:COURSES.includes(x.course)?x.course:"main",minutes:Number(x.minutes)||"",serves:Number(x.serves)||householdSize(),tags:(Array.isArray(x.tags)?x.tags:list(x.tags)).map(norm).filter(Boolean).slice(0,8),ingredients:ing,staples,how:String(x.how||"").trim().slice(0,1500)};
     if(x.source)r.source=String(x.source).slice(0,120);if(x.note)r.note=String(x.note).slice(0,300);
+    if(RATINGS.includes(x.rating))r.rating=x.rating;if(x.comment)r.comment=String(x.comment).slice(0,500);if(/^\d{4}-\d\d-\d\d$/.test(x.restUntil||""))r.restUntil=x.restUntil;
     const id=slug(r.name);return {id,r,units,prices,exists:!!S.recipes[id],on:!S.recipes[id]}})}
 function renderImport(){const I=S.imp;const n=I.rows.filter(x=>x.on).length;
   return `<div class="card" style="display:flex;flex-direction:column;gap:8px"><h2>Import ${I.rows.length} recipe${I.rows.length===1?"":"s"}</h2>
@@ -729,6 +774,8 @@ view.addEventListener("click",e=>{
   if(ds.ron!=null&&t.type==="checkbox"){S.review.rows[Number(ds.ron)].on=t.checked;return render()}
   if(ds.xdel!=null){S.review.extra.splice(Number(ds.xdel),1);return render()}
   if(t.id==="rvok")return confirmReview();
+  if(ds.rate){const [rid,k]=ds.rate.split("|");const r0=S.recipes[rid];if(!r0)return;const r=Object.assign({},r0,{rating:r0.rating===k?"":k});S.recipes[rid]=r;render();write("recipes/"+rid,d=>d.set(r));return}
+  if(ds.ideaadd){S.edit={forDay:{ws:S.viewWeek,day:ds.ideaadd},draft:{name:"",tags:[],ingredients:{},units:{},how:""}};S.tab="recipes";S.picking=null;render();window.scrollTo(0,0);return}
   if(ds.kid&&t.type==="checkbox"){const id=ds.kid;const pp=Object.assign({},S.people[id],{kid:t.checked});S.people[id]=pp;render();write("people/"+id,d=>d.set(pp));return}
   if(ds.impon!=null&&t.type==="checkbox"&&S.imp){S.imp.rows[Number(ds.impon)].on=t.checked;return render()}
   if(t.id==="impok")return doImport();
@@ -769,7 +816,7 @@ view.addEventListener("input",e=>{
   if(t.id==="st-dinner"&&t.value){saveSettings({dinnerTime:t.value});return}
   if(ds.pf){const id=ds.pf;const p=Object.assign({},S.people[id]);p[ds.k]=(ds.k==="name"||ds.k==="notes")?t.value:list(t.value);S.people[id]=p;later("people/"+id,p,900);return}
   if(ds.lw!=null||ds.lm!=null){const st=settings();const i=Number(ds.lw!=null?ds.lw:ds.lm);st.limits=st.limits.map((l,j)=>j===i?(ds.lw!=null?{what:norm(t.value),max:l.max}:{what:l.what,max:Number(t.value)||0}):l);S.settings=st;later("settings/main",st,900);return}
-  const map={"st-budget":"budget","st-household":"household","st-quick":"quickMax","st-dp":"defaultPrice","st-kidpass":"kidPasses"};
+  const map={"st-budget":"budget","st-household":"household","st-quick":"quickMax","st-dp":"defaultPrice","st-kidpass":"kidPasses","st-newpw":"newPerWeek"};
   if(map[t.id]&&t.value!==""){saveSettings({[map[t.id]]:Number(t.value)})}
 });
 view.addEventListener("keydown",e=>{if(e.target.id==="aiNameIn"&&e.key==="Enter"){e.preventDefault();const v=e.target.value.trim();if(v)aiDraft("name",v.slice(0,80))}});
@@ -786,12 +833,17 @@ view.addEventListener("submit",e=>{
   if(f.id==="recForm"){const name=$("#rf-name").value.trim();if(!name)return;const id=S.edit.id||slug(name);
     const P=parseIng($("#rf-ing").value);
     const old=S.edit.id?S.recipes[S.edit.id]||{}:{};
-    const r=Object.assign({},old,{name,course:$("#rf-course").value||"main",minutes:Number($("#rf-min").value)||"",serves:Number($("#rf-serves").value)||settings().household,tags:list($("#rf-tags").value),staples:list($("#rf-staples").value),ingredients:P.ing,how:$("#rf-how").value.trim()});
+    const rr=(document.querySelector('input[name="rf-rating"]:checked')||{}).value||"";const rest=$("#rf-rest").value;
+    const r=Object.assign({},old,{name,course:$("#rf-course").value||"main",minutes:Number($("#rf-min").value)||"",serves:Number($("#rf-serves").value)||settings().household,tags:list($("#rf-tags").value),staples:list($("#rf-staples").value),ingredients:P.ing,how:$("#rf-how").value.trim(),rating:rr,comment:$("#rf-comment").value.trim()});
+    if(rest==="")delete r.restUntil;else if(rest!=="keep")r.restUntil=addDays(isoDay(todayStart()),7*Number(rest));
+    if(S.edit.forDay)r.source=r.source||"website";
+    const forDay=S.edit.forDay;
     const prices=(S.edit.draft&&S.edit.draft.prices)||{};
     S.recipes[id]=r;S.edit=null;render();write("recipes/"+id,d=>d.set(r));
     Object.keys(r.ingredients).forEach(k=>{const iid=slug(k);const old=S.items[iid];
       if(old){if(P.units[k]&&!old.unit){const it=Object.assign({},old,{unit:P.units[k]});S.items[iid]=it;write("items/"+iid,d=>d.set(it))}return}
       const it={name:k,have:0,unit:P.units[k]||guessUnit(k),price:prices[k]!=null?prices[k]:""};S.items[iid]=it;write("items/"+iid,d=>d.set(it))});
+    if(forDay){S.tab="week";S.viewWeek=forDay.ws;pickMeal(forDay.ws,forDay.day,id);window.scrollTo(0,0)}
     return}
 });
 
