@@ -174,6 +174,8 @@ if("serviceWorker" in navigator)window.addEventListener("load",()=>navigator.ser
 const DAYS=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const MODES=["cook","quick","leftovers","skip"];
 const MODE_LABEL={cook:"Cook",quick:"Quick",leftovers:"Leftovers",skip:"Off"};
+const COURSES=["main","side","sauce","breakfast","dessert","snack","drink"];
+const COURSE_LABEL={main:"Main dish",side:"Side",sauce:"Sauce / base",breakfast:"Breakfast",dessert:"Dessert",snack:"Snack",drink:"Drink"};
 const DEFAULTS={budget:25,household:4,quickMax:25,defaultPrice:2,limits:[{what:"chicken",max:2}],
   days:{Mon:"cook",Tue:"quick",Wed:"cook",Thu:"leftovers",Fri:"cook",Sat:"cook",Sun:"cook"}};
 
@@ -239,7 +241,7 @@ function planWeek(opt){
   opt=opt||{};const wk=opt.ws||S.viewWeek;const p=opt.plan||S.plans[wk]||null;
   const locked=opt.locked||{},avoid=opt.avoid||{},keep=opt.keep||{};
   const st=settings();
-  const recs=Object.entries(S.recipes).map(([id,r])=>Object.assign({id},r));
+  const recs=Object.entries(S.recipes).map(([id,r])=>Object.assign({id},r)).filter(r=>!r.course||r.course==="main"||Object.values(locked).includes(r.id));
   const base=pantryMap();const res=reservedFor(wk);for(const [k,q] of Object.entries(res))base[k]=(base[k]||0)-q;
   const taken={};Object.entries(locked).forEach(([d,id])=>{taken[id]=d});Object.entries(keep).forEach(([d,x])=>{if(x&&x.rid&&x.mode!=="leftovers")taken[x.rid]=d});
   let best=null;const RUNS=recs.length?300:1;
@@ -316,6 +318,7 @@ function pickChoices(ws,day){
   const counts={};(p&&p.days||[]).forEach(x=>{if(x.day===day||!x.rid||x.mode==="leftovers")return;const r=S.recipes[x.rid];if(!r)return;const w=words(r);st.limits.forEach(l=>{if(l.what&&hits(w,l.what)){const k=norm(l.what);counts[k]=(counts[k]||0)+1}})});
   const usedElse=new Set((p&&p.days||[]).filter(x=>x.day!==day&&x.mode!=="leftovers").map(x=>x.rid));
   return Object.entries(S.recipes).map(([id,r])=>{const w=words(r);const why=[];
+    if(r.course&&r.course!=="main")why.push((COURSE_LABEL[r.course]||r.course).toLowerCase()+", not a main dish");
     const b=blockedBy(r,eaters);if(b)why.push(b+" won't eat it");
     if(mode==="quick"&&(Number(r.minutes)||30)>st.quickMax)why.push("too long for a quick night");
     st.limits.forEach(l=>{if(l.what&&hits(w,l.what)&&(counts[norm(l.what)]||0)+1>Number(l.max))why.push("over the "+l.what+" limit")});
@@ -524,7 +527,9 @@ function renderRecipes(){
     <label>Name<input id="rf-name" required value="${esc(r.name||"")}"></label>
     <div class="grid2"><label>Minutes<input id="rf-min" type="number" min="1" inputmode="numeric" value="${esc(r.minutes||"")}" placeholder="30"></label>
     <label>Serves<input id="rf-serves" type="number" min="1" inputmode="numeric" value="${esc(r.serves||st.household)}"></label></div>
-    <label>Tags (comma separated)<input id="rf-tags" value="${esc((r.tags||[]).join(", "))}" placeholder="mexican, chicken, quick"></label>
+    <div class="grid2"><label>Kind of dish<select id="rf-course">${COURSES.map(c=>`<option value="${c}" ${(r.course||"main")===c?"selected":""}>${COURSE_LABEL[c]}</option>`).join("")}</select></label>
+    <label>Tags (comma separated)<input id="rf-tags" value="${esc((r.tags||[]).join(", "))}" placeholder="mexican, chicken, quick"></label></div>
+    <label>Pantry staples it uses (not counted or shopped)<input id="rf-staples" value="${esc((r.staples||[]).join(", "))}" placeholder="salt, chili powder, oil"></label>
     <label>Ingredients, one per line: amount then item<textarea id="rf-ing" placeholder="1 rice&#10;2 eggs&#10;1 onion">${esc(ingText(r))}</textarea></label>
     <label>How to make it<textarea id="rf-how">${esc(r.how||"")}</textarea></label>
     <div class="row"><button class="primary" ${S.canWrite?"":"disabled"}>Save recipe</button><button type="button" class="ghost" id="rf-cancel">Cancel</button>
@@ -548,7 +553,7 @@ function renderRecipes(){
     const who=blockedBy(r,people);const ing=Object.entries(r.ingredients||{});const have=ing.filter(([k,q])=>(pm[norm(k)]||0)>=q).length;
     h+=`<button class="card" data-edit="${esc(id)}" style="text-align:left;border-radius:var(--r);font-weight:400;display:block;width:100%">
     <div class="row spread"><span class="meal">${esc(r.name)}</span><span class="small muted num">${r.minutes?esc(r.minutes)+" min":""}</span></div>
-    <div class="row" style="gap:5px;margin-top:4px">${(r.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>
+    <div class="row" style="gap:5px;margin-top:4px">${r.course&&r.course!=="main"?`<span class="tag" style="color:var(--butter);border-color:var(--butter)">${esc(COURSE_LABEL[r.course]||r.course)}</span>`:""}${(r.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>
     <div class="small muted" style="margin-top:6px">${have} of ${ing.length} ingredients on hand${who?` · <span style="color:var(--tomato)">skipped: ${esc(who)} won't eat it</span>`:""}</div></button>`;
   }
   return h+`</section>`;
@@ -653,18 +658,20 @@ function aiClient(endpoint){return{json:async(prompt,opt)=>{
 function readImport(text){
   let j;try{j=JSON.parse(text)}catch(_){throw new Error("That file isn't a recipe file (it isn't valid JSON).")}
   const arr=Array.isArray(j)?j:(j&&Array.isArray(j.recipes)?j.recipes:null);if(!arr||!arr.length)throw new Error("No recipes found in that file.");
-  return arr.filter(x=>x&&x.name).map(x=>{const ing={},units={},prices={};
+  return arr.filter(x=>x&&x.name).map(x=>{const ing={},units={},prices={},staples=[];
     (Array.isArray(x.ingredients)?x.ingredients:[]).forEach(i=>{if(typeof i==="string"){const P=parseIng(i);Object.assign(ing,P.ing);Object.assign(units,P.units);return}
-      const n=norm(i&&i.item);if(!n)return;ing[n]=(ing[n]||0)+(Number(i.qty)>0?Number(i.qty):1);if(i.unit)units[n]=normUnit(String(i.unit));if(Number(i.price_each)>0)prices[n]=Math.round(Number(i.price_each)*100)/100});
-    const r={name:String(x.name).trim().slice(0,80),minutes:Number(x.minutes)||"",serves:Number(x.serves)||householdSize(),tags:(Array.isArray(x.tags)?x.tags:list(x.tags)).map(norm).filter(Boolean).slice(0,8),ingredients:ing,how:String(x.how||"").trim().slice(0,1500)};
+      const n=norm(i&&i.item);if(!n)return;if(i.staple){if(!staples.includes(n))staples.push(n);return}
+      const q=Number(i.shop_qty)>0?Number(i.shop_qty):(Number(i.qty)>0?Number(i.qty):1);const u=i.shop_unit||i.unit;
+      ing[n]=Math.round(((ing[n]||0)+q)*100)/100;if(u)units[n]=normUnit(String(u));if(Number(i.price_each)>0)prices[n]=Math.round(Number(i.price_each)*100)/100});
+    const r={name:String(x.name).trim().slice(0,80),course:COURSES.includes(x.course)?x.course:"main",minutes:Number(x.minutes)||"",serves:Number(x.serves)||householdSize(),tags:(Array.isArray(x.tags)?x.tags:list(x.tags)).map(norm).filter(Boolean).slice(0,8),ingredients:ing,staples,how:String(x.how||"").trim().slice(0,1500)};
     if(x.source)r.source=String(x.source).slice(0,120);if(x.note)r.note=String(x.note).slice(0,300);
     const id=slug(r.name);return {id,r,units,prices,exists:!!S.recipes[id],on:!S.recipes[id]}})}
 function renderImport(){const I=S.imp;const n=I.rows.filter(x=>x.on).length;
   return `<div class="card" style="display:flex;flex-direction:column;gap:8px"><h2>Import ${I.rows.length} recipe${I.rows.length===1?"":"s"}</h2>
   <p class="small muted" style="margin:0">From <b>${esc(I.file)}</b>. Untick any you don't want. Ones you already have are unticked; tick them to replace yours. Tap a name to see the ingredients.</p></div>
   <div class="card"><div class="list">${I.rows.map((x,i)=>`<div class="li" style="align-items:start"><label style="flex-direction:row;align-items:start;gap:10px;color:var(--ink);font-size:.95rem;font-weight:400;min-width:0"><input type="checkbox" data-impon="${i}" ${x.on?"checked":""} style="width:20px;min-height:20px;margin-top:3px;accent-color:var(--accent)">
-    <details style="min-width:0"><summary style="cursor:pointer"><b>${esc(x.r.name)}</b> ${x.exists?`<span class="small" style="color:var(--butter)">· already in your book</span>`:""}<br><span class="small muted">${x.r.minutes?esc(x.r.minutes)+" min · ":""}serves ${esc(x.r.serves)} · ${Object.keys(x.r.ingredients).length} ingredients${x.r.tags.length?" · "+esc(x.r.tags.join(", ")):""}</span></summary>
-    <div class="small" style="margin-top:6px;white-space:pre-line">${esc(ingText({ingredients:x.r.ingredients,units:x.units}))}</div>${x.r.how?`<p class="how">${esc(x.r.how)}</p>`:""}${x.r.note?`<p class="small" style="color:var(--butter);margin:4px 0 0">${esc(x.r.note)}</p>`:""}</details></label></div>`).join("")}</div></div>
+    <details style="min-width:0"><summary style="cursor:pointer"><b>${esc(x.r.name)}</b> ${x.exists?`<span class="small" style="color:var(--butter)">· already in your book</span>`:""}<br><span class="small muted">${x.r.course!=="main"?esc(COURSE_LABEL[x.r.course])+" · ":""}${x.r.minutes?esc(x.r.minutes)+" min · ":""}serves ${esc(x.r.serves)} · ${Object.keys(x.r.ingredients).length} ingredients${x.r.tags.length?" · "+esc(x.r.tags.join(", ")):""}</span></summary>
+    <div class="small" style="margin-top:6px;white-space:pre-line">${esc(ingText({ingredients:x.r.ingredients,units:x.units}))}</div>${x.r.staples&&x.r.staples.length?`<div class="small muted">Staples: ${esc(x.r.staples.join(", "))}</div>`:""}${x.r.how?`<p class="how">${esc(x.r.how)}</p>`:""}${x.r.note?`<p class="small" style="color:var(--butter);margin:4px 0 0">${esc(x.r.note)}</p>`:""}</details></label></div>`).join("")}</div></div>
   <div class="row"><button class="primary" id="impok" ${n&&S.canWrite?"":"disabled"}>Import ${n} recipe${n===1?"":"s"}</button><button class="ghost" id="impcancel">Cancel</button></div>`}
 async function doImport(){const I=S.imp;if(!I)return;const rows=I.rows.filter(x=>x.on);S.imp=null;render();
   for(const x of rows){S.recipes[x.id]=x.r;await write("recipes/"+x.id,d=>d.set(x.r));
@@ -758,7 +765,8 @@ view.addEventListener("submit",e=>{
     S.items[id]=it;render();write("items/"+id,d=>d.set(it));const n=$("#ni-name");if(n)n.focus();return}
   if(f.id==="recForm"){const name=$("#rf-name").value.trim();if(!name)return;const id=S.edit.id||slug(name);
     const P=parseIng($("#rf-ing").value);
-    const r={name,minutes:Number($("#rf-min").value)||"",serves:Number($("#rf-serves").value)||settings().household,tags:list($("#rf-tags").value),ingredients:P.ing,how:$("#rf-how").value.trim()};
+    const old=S.edit.id?S.recipes[S.edit.id]||{}:{};
+    const r=Object.assign({},old,{name,course:$("#rf-course").value||"main",minutes:Number($("#rf-min").value)||"",serves:Number($("#rf-serves").value)||settings().household,tags:list($("#rf-tags").value),staples:list($("#rf-staples").value),ingredients:P.ing,how:$("#rf-how").value.trim()});
     const prices=(S.edit.draft&&S.edit.draft.prices)||{};
     S.recipes[id]=r;S.edit=null;render();write("recipes/"+id,d=>d.set(r));
     Object.keys(r.ingredients).forEach(k=>{const iid=slug(k);const old=S.items[iid];
