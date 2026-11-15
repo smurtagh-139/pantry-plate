@@ -249,6 +249,13 @@ function chooseIdeaDays(wk,p,locked,keep){const n=ideasPerWeek();if(!n)return[];
     const nd=DAYS[DAYS.indexOf(d)+1];if(nd&&modeFor(p,nd)==="leftovers")continue;out.push(d)}
   return out}
 const CUISINES=["mexican","italian","asian","thai","indian","chinese","greek","mediterranean","cajun","bbq","korean","japanese","french","american","southern"];
+/* ---------- mood for the week + seasonal nudge ---------- */
+const MOODS=[["Soups & stews",["soup","stew","chili","bisque","chowder"]],["Comfort food",["comfort","casserole","meatloaf","pot pie","mac and cheese","baked","mashed"]],["Grill",["grill","grilled","bbq","burger","kabob"]],["Light & fresh",["salad","bowl","light","lettuce","wrap","poke"]],["Seafood",["shrimp","salmon","fish","tuna","clam","mussel","lobster","crab"]],["Mexican",["mexican","taco","enchilada","burrito","quesadilla","fajita"]],["Italian",["italian","pasta","pizza","tortellini","lasagna","focaccia"]],["Asian",["asian","thai","chinese","pad thai","curry","korean","japanese","stir-fry","banh mi"]],["Chicken",["chicken"]],["Beef",["beef","steak"]],["Meatless",["vegetarian"]],["Slow cooker",["slow cooker","instant pot","crockpot"]]];
+const SEASON_TERMS={fall:["soup","stew","chili","bisque","chowder","roast","casserole","pumpkin","squash","apple"],winter:["soup","stew","chili","bisque","roast","casserole","comfort","pot pie"],spring:["salad","light","bowl","asparagus","lemon","grill"],summer:["grill","grilled","salad","bbq","corn","tomato","cold","poke"]};
+function seasonNow(){const m=new Date().getMonth();return m>=8&&m<=10?"fall":m===11||m<=1?"winter":m<=4?"spring":"summer"}
+function moodTerms(p){const out=[];((p&&p.mood)||[]).forEach(lab=>{const m=MOODS.find(x=>x[0]===lab);if(m)out.push(...m[1])});list((p&&p.moodText)||"").forEach(t=>out.push(t));return out}
+function moodScore(ws,p){let s=0;const terms=moodTerms(p);if(terms.length&&terms.some(t=>hits(ws,t)))s+=3;
+  if(settings().seasonal!==false&&SEASON_TERMS[seasonNow()].some(t=>hits(ws,t)))s+=1.5;return s}
 function ideaQuery(p,d,seed){
   const eaters=Object.keys(S.people).length?eatersFor(p,d):[];
   const MEAT=/chicken|beef|turkey|pork|sausage|bacon|steak|lamb|ham|salmon|shrimp|fish|tilapia|cod|tuna|meatball|tofu|chops?|roast|ribs?/;
@@ -256,7 +263,9 @@ function ideaQuery(p,d,seed){
   const veg=Object.values(S.items).filter(it=>(Number(it.have)||0)>=1&&(it.unit||guessUnit(it.name))==="each").map(it=>it.name);
   const liked=[];eaters.forEach(e=>(e.likes||[]).forEach(l=>{if(CUISINES.includes(norm(l)))liked.push(norm(l))}));
   const pick=a=>a.length?a[Math.floor(Math.random()*a.length)]:"";
-  const parts=[pick(proteins)||pick(["chicken","ground beef","pork","shrimp","salmon","sausage"]),Math.random()<0.5?pick(veg):"",pick(liked)||pick(["sheet pan","one pot","skillet","slow cooker",""])].filter(Boolean);
+  const mood=moodTerms(p).filter(t=>t.length>2);const season=settings().seasonal!==false?SEASON_TERMS[seasonNow()]:[];
+  const style=pick(mood)||(Math.random()<0.5?pick(season.slice(0,5)):"")||pick(liked)||pick(["sheet pan","one pot","skillet","slow cooker",""]);
+  const parts=[pick(proteins)||pick(["chicken","ground beef","pork","shrimp","salmon","sausage"]),Math.random()<0.4?pick(veg):"",style].filter(Boolean);
   return Array.from(new Set(parts)).join(" ")}
 function newIdea(ws,day){updatePlan(ws,p=>{const x=(p.days||[]).find(y=>y.day===day);if(x)x.query=ideaQuery(p,day,Math.random())})}
 function reservedFor(exceptWs){const t=todayStart();const out={};
@@ -305,7 +314,7 @@ function planWeek(opt){
         for(const [k,q] of Object.entries(need)){const short=q-(pantry[k]||0);if(short>0){const buy=Math.ceil(short-1e-9);missing[k]=buy;cost+=buy*priceOf(k)}}
         if(cost>budget+1e-9&&!isLocked)continue;
         if(!isLocked&&r.restUntil&&isoDay(dateIn(wk,d))<r.restUntil)continue;
-        let s=scoreRecipe(r,ws,eaters,pantry,prev)+(RATING_BONUS[r.rating]||0);
+        let s=scoreRecipe(r,ws,eaters,pantry,prev)+(RATING_BONUS[r.rating]||0)+moodScore(ws,p);
         const keys=Object.keys(need);const have=keys.filter(k=>(pantry[k]||0)>=need[k]).length;
         s+=keys.length?3*have/keys.length:0;s-=0.2*cost;if(isLocked)s+=100;
         if(bi.kid.length)s-=2.5*bi.kid.length;
@@ -369,7 +378,8 @@ function pickChoices(ws,day){
     if(usedElse.has(id))why.push("already on another day");
     if(((p&&p.rejects&&p.rejects[day])||[]).includes(id))why.push("you swapped it out");
     const need=scaled(r,n);let cost=0;for(const [k,q] of Object.entries(need)){const short=q-(base[k]||0);if(short>0)cost+=Math.ceil(short-1e-9)*priceOf(k)}
-    return {id,r,cost,why}}).sort((a,b)=>(a.why.length-b.why.length)||(a.cost-b.cost)||String(a.r.name).localeCompare(String(b.r.name)))}
+    const mt=moodTerms(p);const mood=mt.length&&mt.some(t=>hits(w,t));
+    return {id,r,cost,why,mood}}).sort((a,b)=>(a.why.length-b.why.length)||((b.mood?1:0)-(a.mood?1:0))||(a.cost-b.cost)||String(a.r.name).localeCompare(String(b.r.name)))}
 function toggleLock(ws,day){updatePlan(ws,p=>{const x=p.days.find(d=>d.day===day);if(x)x.locked=!x.locked})}
 async function cooked(ws,day){
   const p=S.plans[ws];const x=p&&(p.days||[]).find(d=>d.day===day);if(!x||x.cooked)return;
@@ -460,6 +470,10 @@ function renderWeek(){
   h+=`<div class="card"><div class="row spread" style="flex-wrap:nowrap"><button class="ghost" data-wk="-7" aria-label="Previous week" style="padding:6px 12px">‹</button><div style="text-align:center;min-width:0"><h2>${esc(weekLabel(ws))}</h2><div class="small muted">${planned?"Planned "+new Date(p.made).toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"}):"Not planned yet"}</div></div><button class="ghost" data-wk="7" aria-label="Next week" style="padding:6px 12px">›</button></div>
   <div class="row" style="margin-top:10px"><button class="primary" id="make" ${S.canWrite?"":"disabled"}>${planned?"Re-plan the rest":"Plan this week"}</button>${planned?`<button class="ghost" id="ics">Add week to calendar</button>`:""}</div>
   ${planned?`<div style="margin-top:12px"><div class="row spread small"><span>Shopping <b class="num">${money(spent)}</b> of <span class="num">${money(budget)}</span></span><span class="muted num">${money(Math.max(0,budget-spent))} left</span></div><div class="meter ${spent>budget?"over":""}" style="margin-top:6px"><i style="width:${pct}%"></i></div></div>`:""}
+  <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px"><div class="small" style="font-weight:600;margin-bottom:6px">In the mood for…</div>
+  <div class="row" style="gap:5px">${MOODS.map(m=>{const on=((p&&p.mood)||[]).includes(m[0]);return `<button class="chip ${on?"cook":""}" data-mood="${esc(m[0])}" aria-pressed="${on}" ${S.canWrite?"":"disabled"}>${on?"✓ ":""}${esc(m[0])}</button>`}).join("")}</div>
+  <input id="mood-text" data-moodtext="1" value="${esc((p&&p.moodText)||"")}" placeholder="Or type it: pumpkin, tacos, sheet pan…" style="margin-top:8px" ${S.canWrite?"":"disabled"}>
+  <div class="small muted" style="margin-top:6px">${settings().seasonal!==false?`Season: <b>${esc(seasonNow())}</b>, so ${esc(SEASON_TERMS[seasonNow()].slice(0,3).join(", "))} get a nudge too (change in Rules). `:""}Moods push matching meals up when you plan; they don't rule anything out.</div></div>
   <p class="small muted" style="margin:10px 0 0">Set each night first: tap the label for Cook, Quick, Leftovers or Off, and tap names to mark who's home. Then plan. Pinned meals stay put.</p></div>`;
   const notes=peopleList().filter(x=>x.notes);
   if(notes.length)h+=`<details class="card"><summary class="small" style="cursor:pointer"><b>Family notes</b> (${notes.length})</summary><ul class="small" style="margin:6px 0 0;padding-left:18px">${notes.map(x=>`<li><b>${esc(x.name||"?")}:</b> ${esc(x.notes)}</li>`).join("")}</ul></details>`;
@@ -541,7 +555,7 @@ function renderPicker(ws,d){
   const ch=pickChoices(ws,d);
   return `<div class="card" style="margin-top:10px;background:var(--bg)"><div class="row spread"><b>Pick a meal for ${d}</b><button class="ghost" id="pickcancel" style="min-height:32px;padding:4px 10px">Close</button></div>
   <div class="list" style="margin-top:6px">${ch.map(c=>`<button class="li" data-pickid="${esc(c.id)}" style="border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;text-align:left;font-weight:400;width:100%;padding:10px 0;min-height:0">
-    <span style="min-width:0"><b>${esc(c.r.name)}</b>${c.r.minutes?` <span class="small muted">${esc(c.r.minutes)} min</span>`:""}${c.why.length?`<br><span class="small" style="color:var(--butter)">${esc(c.why.join("; "))}</span>`:""}</span>
+    <span style="min-width:0"><b>${esc(c.r.name)}</b>${c.r.minutes?` <span class="small muted">${esc(c.r.minutes)} min</span>`:""}${c.mood?` <span class="small" style="color:var(--accent)">· in the mood</span>`:""}${c.why.length?`<br><span class="small" style="color:var(--butter)">${esc(c.why.join("; "))}</span>`:""}</span>
     <span class="small num ${c.cost?"":"muted"}">${c.cost?"+"+money(c.cost):"in pantry"}</span></button>`).join("")}</div>
   <p class="small muted" style="margin:6px 0 0">Meals that fit come first. You can still pick one with a warning.</p></div>`;
 }
@@ -669,6 +683,7 @@ function renderRules(){
   <label>Quick night max (min)<input id="st-quick" type="number" min="5" step="5" inputmode="numeric" value="${esc(st.quickMax)}"></label></div>
   <label>Kid passes per week (meals a kid's "won't eat" can be overruled)<input id="st-kidpass" type="number" min="0" max="7" step="1" inputmode="numeric" value="${esc(kidPasses())}"></label>
   <label>New recipe nights per week (left open to try something from Allrecipes, Delish…)<input id="st-newpw" type="number" min="0" max="3" step="1" inputmode="numeric" value="${esc(ideasPerWeek())}"></label>
+  <label style="flex-direction:row;align-items:center;gap:10px;color:var(--ink);font-size:.95rem"><input type="checkbox" id="st-seasonal" ${st.seasonal!==false?"checked":""} style="width:20px;min-height:20px;accent-color:var(--accent)"> Seasonal nudge (fall and winter: soups and stews; summer: grill and salads)</label>
   <div class="grid2"><label>Price for items with no price ($)<input id="st-dp" type="number" min="0" step="0.25" inputmode="decimal" value="${esc(st.defaultPrice)}"></label>
   <label>Dinner time (for the calendar)<input id="st-dinner" type="time" value="${esc(st.dinnerTime||"18:00")}"></label></div></div>
   <div class="card"><h2>Usual week</h2><p class="small muted" style="margin:4px 0 10px">Quick for lessons and practice nights. Leftovers eats the day before's meal, and that day's recipe is doubled.</p>
@@ -807,6 +822,8 @@ view.addEventListener("click",e=>{
   if(ds.ron!=null&&t.type==="checkbox"){S.review.rows[Number(ds.ron)].on=t.checked;return render()}
   if(ds.xdel!=null){S.review.extra.splice(Number(ds.xdel),1);return render()}
   if(t.id==="rvok")return confirmReview();
+  if(ds.mood){const lab=ds.mood;return updatePlan(S.viewWeek,p=>{const m=(p.mood||[]).slice();const i=m.indexOf(lab);if(i>=0)m.splice(i,1);else m.push(lab);p.mood=m},600)}
+  if(t.id==="st-seasonal"){saveSettings({seasonal:t.checked});return render()}
   if(ds.rate){const [rid,k]=ds.rate.split("|");const r0=S.recipes[rid];if(!r0)return;const r=Object.assign({},r0,{rating:r0.rating===k?"":k});S.recipes[rid]=r;render();write("recipes/"+rid,d=>d.set(r));return}
   if(ds.ideaadd){S.edit={forDay:{ws:S.viewWeek,day:ds.ideaadd},draft:{name:"",tags:[],ingredients:{},units:{},how:""}};S.tab="recipes";S.picking=null;render();window.scrollTo(0,0);return}
   if(ds.kid&&t.type==="checkbox"){const id=ds.kid;const pp=Object.assign({},S.people[id],{kid:t.checked});S.people[id]=pp;render();write("people/"+id,d=>d.set(pp));return}
@@ -847,6 +864,7 @@ view.addEventListener("input",e=>{
   if(ds.price){const id=ds.price;const it=Object.assign({},S.items[id],{price:t.value===""?"":Number(t.value)});S.items[id]=it;later("items/"+id,it,900);return}
   if(ds.rq!=null&&S.review){S.review.rows[Number(ds.rq)].q=Math.max(0,Number(t.value)||0);return}
   if(t.id==="st-dinner"&&t.value){saveSettings({dinnerTime:t.value});return}
+  if(ds.moodtext){const v=t.value;const ws=S.viewWeek;const p=clone(S.plans[ws]||{weekStart:ws});p.weekStart=ws;p.moodText=v;S.plans[ws]=p;later("plans/"+ws,p,900);return}
   if(ds.pf){const id=ds.pf;const p=Object.assign({},S.people[id]);p[ds.k]=(ds.k==="name"||ds.k==="notes")?t.value:list(t.value);S.people[id]=p;later("people/"+id,p,900);return}
   if(ds.lw!=null||ds.lm!=null){const st=settings();const i=Number(ds.lw!=null?ds.lw:ds.lm);st.limits=st.limits.map((l,j)=>j===i?(ds.lw!=null?{what:norm(t.value),max:l.max}:{what:l.what,max:Number(t.value)||0}):l);S.settings=st;later("settings/main",st,900);return}
   const map={"st-budget":"budget","st-household":"household","st-quick":"quickMax","st-dp":"defaultPrice","st-kidpass":"kidPasses","st-newpw":"newPerWeek"};
