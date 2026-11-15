@@ -478,7 +478,7 @@ function renderWeek(){
       <div class="acts"><a class="btn ghost" href="https://www.allrecipes.com/search?q=${enc}" target="_blank" rel="noopener" style="min-height:34px;padding:5px 11px;font-size:.82rem;text-decoration:none;display:inline-flex;align-items:center">Allrecipes</a>
       <a class="btn ghost" href="https://www.delish.com/search/?q=${enc}" target="_blank" rel="noopener" style="min-height:34px;padding:5px 11px;font-size:.82rem;text-decoration:none;display:inline-flex;align-items:center">Delish</a>
       <a class="btn ghost" href="https://www.google.com/search?q=${encodeURIComponent(q+" recipe")}" target="_blank" rel="noopener" style="min-height:34px;padding:5px 11px;font-size:.82rem;text-decoration:none;display:inline-flex;align-items:center">Google</a>
-      ${past?"":`<button class="primary" data-ideaadd="${d}" ${S.canWrite?"":"disabled"}>Found one: add it</button><button class="ghost" data-swap="${d}" ${S.canWrite?"":"disabled"}>Another idea</button><button class="ghost" data-pick="${d}" ${S.canWrite?"":"disabled"}>Use one of ours</button>`}</div>`;
+      ${past||x.notMade?"":`<button class="primary" data-ideaadd="${d}" ${S.canWrite?"":"disabled"}>Found one: add it</button><button class="ghost" data-swap="${d}" ${S.canWrite?"":"disabled"}>Another idea</button><button class="ghost" data-pick="${d}" ${S.canWrite?"":"disabled"}>Use one of ours</button>`}</div>${madeRow(ws,d,x)}`;
     }
     else if(x&&x.rid){
       const r=S.recipes[x.rid]||{};const miss=Object.entries(x.missing||{});
@@ -488,11 +488,12 @@ function renderWeek(){
       ${(()=>{const k=blockInfo(r,Object.keys(S.people).length?eatersFor(p,d):[]).kid;return k.length?`<div class="small" style="color:var(--butter);margin-top:2px">Kid pass: ${esc(k.join(", "))} won't love this one.</div>`:""})()}
       ${r.how?`<p class="how">${esc(r.how)}</p>`:""}
       ${x.cooked?`<div class="row small" style="gap:5px;margin-top:6px"><span class="muted">How was it?</span>${RATINGS.map(k=>`<button class="chip ${r.rating===k?"cook":""}" data-rate="${esc(x.rid)}|${k}" ${S.canWrite?"":"disabled"}>${RATING_LABEL[k]}</button>`).join("")}</div>`:""}
-      <div class="acts">${x.cooked?`<span class="done">✓ Cooked</span>`:x.notMade?`<span class="muted small">Didn't make it</span>`:`<button data-cook="${d}" data-ws="${ws}" ${S.canWrite?"":"disabled"}>Cooked it</button>`}
-      ${past?"":`<button class="ghost" data-swap="${d}" ${S.canWrite?"":"disabled"}>Swap</button><button class="ghost" data-pick="${d}" ${S.canWrite?"":"disabled"}>Pick a meal</button><button class="ghost" data-lock="${d}" ${S.canWrite?"":"disabled"}>${x.locked?"Unpin":"Pin"}</button>`}
+      ${madeRow(ws,d,x)}
+      <div class="acts">${past||x.cooked||x.notMade?"":`<button class="ghost" data-swap="${d}" ${S.canWrite?"":"disabled"}>Swap</button><button class="ghost" data-pick="${d}" ${S.canWrite?"":"disabled"}>Pick a meal</button><button class="ghost" data-lock="${d}" ${S.canWrite?"":"disabled"}>${x.locked?"Unpin":"Pin"}</button>`}
       <a class="btn ghost" href="${esc(gcalLink(ws,x))}" target="_blank" rel="noopener" style="min-height:34px;padding:5px 11px;font-size:.82rem;text-decoration:none;display:inline-flex;align-items:center">Calendar</a></div>`;
-    } else body=`<div class="muted">Nothing fits the rules and budget. Leftovers or eat out?</div><div class="acts"><button class="ghost" data-swap="${d}">Try again</button><button class="ghost" data-pick="${d}">Pick a meal</button></div>`;
-    if(S.picking===d)body+=renderPicker(ws,d);
+    } else body=`<div class="muted">Nothing fits the rules and budget. Leftovers or eat out?</div><div class="acts"><button class="ghost" data-swap="${d}">Try again</button><button class="ghost" data-pick="${d}">Pick a meal</button></div>${x?madeRow(ws,d,x):""}`;
+    if(mode==="leftovers"&&planned&&x)body+=madeRow(ws,d,x);
+    if(S.picking===d)body+=S.pickMode==="made"?renderMadePicker(ws,d):renderPicker(ws,d);
     const who=ppl.length&&mode!=="skip"?`<div class="row" style="gap:5px;margin-top:8px">${ppl.map(pp=>{const on=eatersFor(p,d).some(e=>e.id===pp.id);return `<button class="chip ${on?"cook":"skip"}" data-who="${d}|${esc(pp.id)}" aria-pressed="${on}" title="${on?"Eating":"Not home"}" ${past||!S.canWrite?"disabled":""}>${on?"✓ ":""}${esc(pp.name||"?")}</button>`}).join("")}</div>`:"";
     const dlabel=dateIn(ws,d).toLocaleDateString(undefined,{month:"numeric",day:"numeric"});
     h+=`<div class="card day"><div class="dname">${d}<small style="margin-top:2px">${esc(dlabel)}</small><small><button class="chip ${mode}" data-mode="${d}" aria-label="${d}: ${MODE_LABEL[mode]}. Tap to change" ${past||!S.canWrite?"disabled":""}>${MODE_LABEL[mode]}</button></small></div><div style="min-width:0">${body}${who}</div></div>`;
@@ -508,6 +509,33 @@ function renderWeek(){
     h+=`</div>`;
   }
   return h+`</section>`;
+}
+/* "What did we actually have?" row on every planned night */
+function madeRow(ws,d,x){
+  const dis=S.canWrite?"":"disabled";const future=dateIn(ws,d)>todayStart();
+  if(x.cooked)return `<div class="row small" style="gap:8px;margin-top:8px"><span class="done">${x.mode==="leftovers"?"✓ Ate the leftovers":"✓ We made "+esc(x.madeOther?x.name:"it")}</span><button class="ghost" data-unmade="${d}" style="min-height:30px;padding:3px 10px;font-size:.78rem" ${dis}>Undo</button></div>`;
+  if(x.notMade)return `<div class="row small" style="gap:8px;margin-top:8px"><span class="muted">${esc(x.notMadeWhy||"Didn't make it")}</span><button class="ghost" data-unmade="${d}" style="min-height:30px;padding:3px 10px;font-size:.78rem" ${dis}>Undo</button></div>`;
+  const lab=future?"Plan changed? ":"";
+  return `<div class="row" style="gap:6px;margin-top:8px">${x.rid&&!x.idea&&x.mode!=="leftovers"?`<button class="primary" data-cook="${d}" data-ws="${ws}" style="min-height:34px;padding:5px 12px;font-size:.84rem" ${dis}>We made it</button>`:""}
+    ${x.mode==="leftovers"&&x.name?`<button class="primary" data-ateleft="${d}" style="min-height:34px;padding:5px 12px;font-size:.84rem" ${dis}>Ate the leftovers</button>`:""}
+    <button class="ghost" data-madeother="${d}" style="min-height:34px;padding:5px 12px;font-size:.84rem" ${dis}>${lab}Made something else</button>
+    <button class="ghost" data-notmade="${d}" data-ws="${ws}" style="min-height:34px;padding:5px 12px;font-size:.84rem" ${dis}>Ate out / skipped</button></div>`}
+function renderMadePicker(ws,d){
+  const list=Object.entries(S.recipes).sort((a,b)=>norm(a[1].name).localeCompare(norm(b[1].name)));
+  return `<div class="card" style="margin-top:10px;background:var(--bg)"><div class="row spread"><b>What did you make on ${d}?</b><button class="ghost" id="pickcancel" style="min-height:32px;padding:4px 10px">Close</button></div>
+  <p class="small muted" style="margin:4px 0 6px">Its ingredients come out of the pantry.</p>
+  <div class="list">${list.map(([id,r])=>`<button class="li" data-madeid="${esc(id)}" style="border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;text-align:left;font-weight:400;width:100%;padding:9px 0;min-height:0"><span><b>${esc(r.name)}</b>${r.course&&r.course!=="main"?` <span class="small muted">${esc(COURSE_LABEL[r.course])}</span>`:""}</span><span></span></button>`).join("")}</div>
+  <div class="row" style="margin-top:8px"><button class="ghost" data-madenone="${d}">Something not in our book</button></div></div>`}
+async function madeOther(ws,day,rid){
+  const r=S.recipes[rid];if(!r)return;const p=S.plans[ws];S.picking=null;S.pickMode=null;
+  const need=scaled(r,countFor(p,day));
+  updatePlan(ws,q=>{const x=q.days.find(y=>y.day===day);if(!x)return;Object.assign(x,{rid,name:r.name,need,missing:{},cost:0,madeOther:true,idea:false,notMade:false,cooked:false});if(x.mode==="leftovers")x.mode="cook"});
+  await cooked(ws,day);
+}
+async function undoMade(ws,day){
+  const p=S.plans[ws];const x=p&&(p.days||[]).find(y=>y.day===day);if(!x)return;
+  if(x.cooked)for(const [k,q] of Object.entries(x.need||{})){const id=slug(k);const it=S.items[id];if(!it)continue;const next=Object.assign({},it,{have:Math.round(((Number(it.have)||0)+q)*100)/100});S.items[id]=next;await write("items/"+id,d=>d.set(next))}
+  updatePlan(ws,q=>{const y=q.days.find(z=>z.day===day);if(y){y.cooked=false;y.notMade=false;delete y.notMadeWhy}});
 }
 function renderPicker(ws,d){
   const ch=pickChoices(ws,d);
@@ -763,7 +791,12 @@ view.addEventListener("click",e=>{
   if(ds.wk){S.viewWeek=addDays(S.viewWeek,Number(ds.wk));S.picking=null;return render()}
   if(t.id==="ics")return icsWeek(S.viewWeek);
   if(ds.swap){S.picking=null;return swapDay(S.viewWeek,ds.swap)}
-  if(ds.pick){S.picking=S.picking===ds.pick?null:ds.pick;return render()}
+  if(ds.pick){S.picking=S.picking===ds.pick&&S.pickMode!=="made"?null:ds.pick;S.pickMode=null;return render()}
+  if(ds.madeother){S.picking=S.picking===ds.madeother&&S.pickMode==="made"?null:ds.madeother;S.pickMode="made";return render()}
+  if(ds.madeid)return madeOther(S.viewWeek,S.picking,ds.madeid);
+  if(ds.madenone){const d=ds.madenone;S.picking=null;S.pickMode=null;return updatePlan(S.viewWeek,p=>{const x=p.days.find(y=>y.day===d);if(x){x.notMade=true;x.notMadeWhy="Made something not in our book"}})}
+  if(ds.ateleft){const d=ds.ateleft;return updatePlan(S.viewWeek,p=>{const x=p.days.find(y=>y.day===d);if(x)x.cooked=true})}
+  if(ds.unmade)return undoMade(S.viewWeek,ds.unmade);
   if(ds.pickid)return pickMeal(S.viewWeek,S.picking,ds.pickid);
   if(t.id==="pickcancel"){S.picking=null;return render()}
   if(ds.lock)return toggleLock(S.viewWeek,ds.lock);
