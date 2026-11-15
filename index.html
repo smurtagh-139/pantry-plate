@@ -224,7 +224,14 @@ function updatePlan(ws,fn,ms){const p=clone(S.plans[ws]||{weekStart:ws});p.weekS
 /* ---------- planner ---------- */
 function words(r){const w=new Set((r.tags||[]).map(norm));Object.keys(r.ingredients||{}).forEach(k=>w.add(norm(k)));w.add(norm(r.name));return w}
 function hits(ws,term){term=norm(term);if(!term)return false;for(const w of ws){if(w===term||w.includes(term))return true}return false}
-function blockedBy(r,people){const ws=words(r);for(const p of people){for(const n of (p.nogo||[])){if(hits(ws,n))return p.name||"someone"}}return null}
+/* hard = allergies (anyone) or an adult's won't-eat; kid = a kid's won't-eat, which a weekly "pass" can overrule */
+function blockInfo(r,people){const ws=words(r);const hard=[],kid=[],allergy=[];
+  for(const p of people){const nm=p.name||"someone";
+    if((p.allergies||[]).some(n=>hits(ws,n))){allergy.push(nm);hard.push(nm);continue}
+    if((p.nogo||[]).some(n=>hits(ws,n))){(p.kid?kid:hard).push(nm)}}
+  return {hard,kid,allergy}}
+function blockedBy(r,people){const b=blockInfo(r,people);return b.hard.length?b.hard[0]:null}
+function kidPasses(){const v=settings().kidPasses;return v===undefined||v===""?1:Math.max(0,Number(v)||0)}
 function pantryMap(){const m={};for(const it of Object.values(S.items)){m[norm(it.name)]=Number(it.have)||0}return m}
 function priceOf(name){const it=S.items[slug(name)];const st=settings();return it&&it.price!=null&&it.price!==""?Number(it.price):st.defaultPrice}
 function scaled(r,eaters){const n=Math.max(1,eaters);const serves=Number(r.serves)||householdSize();const f=n/serves;const need={};for(const [k,q] of Object.entries(r.ingredients||{})){need[norm(k)]=Math.round((Number(q)||1)*f*100)/100}return need}
@@ -246,7 +253,8 @@ function planWeek(opt){
   const taken={};Object.entries(locked).forEach(([d,id])=>{taken[id]=d});Object.entries(keep).forEach(([d,x])=>{if(x&&x.rid&&x.mode!=="leftovers")taken[x.rid]=d});
   let best=null;const RUNS=recs.length?300:1;
   for(let run=0;run<RUNS;run++){
-    const pantry=Object.assign({},base);let budget=st.budget;const used=new Set(),counts={},shop={},days=[];let total=0,prev=null;
+    const pantry=Object.assign({},base);let budget=st.budget;const used=new Set(),counts={},shop={},days=[];let total=0,prev=null,passes=0;const maxPass=kidPasses();
+    Object.values(keep).forEach(x=>{if(x&&x.overrideFor&&x.overrideFor.length)passes++});
     for(let i=0;i<7;i++){
       const d=DAYS[i],mode=modeFor(p,d);
       if(keep[d]){const k=keep[d];days.push(k);
@@ -262,7 +270,9 @@ function planWeek(opt){
         if(locked[d]&&r.id!==locked[d])continue;
         const isLocked=locked[d]===r.id;
         if(!isLocked&&(used.has(r.id)||(taken[r.id]&&taken[r.id]!==d)||(avoid[d]||[]).includes(r.id)))continue;
-        if(!isLocked&&blockedBy(r,eaters))continue;
+        const bi=blockInfo(r,eaters);
+        if(!isLocked&&bi.hard.length)continue;
+        if(!isLocked&&bi.kid.length&&passes+1>maxPass)continue;
         if(mode==="quick"&&!isLocked&&(Number(r.minutes)||30)>st.quickMax)continue;
         const ws=words(r);
         if(!isLocked&&st.limits.some(l=>l.what&&hits(ws,l.what)&&(counts[norm(l.what)]||0)+1>Number(l.max)))continue;
@@ -272,17 +282,18 @@ function planWeek(opt){
         let s=scoreRecipe(r,ws,eaters,pantry,prev);
         const keys=Object.keys(need);const have=keys.filter(k=>(pantry[k]||0)>=need[k]).length;
         s+=keys.length?3*have/keys.length:0;s-=0.2*cost;if(isLocked)s+=100;
-        cands.push({r,s,cost,missing,need,ws});
+        if(bi.kid.length)s-=2.5*bi.kid.length;
+        cands.push({r,s,cost,missing,need,ws,kid:bi.kid});
       }
       if(!cands.length){days.push({day:d,mode,rid:null});total-=10;prev=null;continue}
       cands.sort((a,b)=>b.s-a.s);
       let pick=cands[0];if(run>0){const top=cands.slice(0,Math.min(3,cands.length));pick=top[Math.floor(Math.random()*top.length)]}
-      const {r,cost,missing,need,ws}=pick;
+      const {r,cost,missing,need,ws}=pick;if(pick.kid.length)passes++;
       used.add(r.id);budget-=cost;total+=pick.s;
       st.limits.forEach(l=>{if(l.what&&hits(ws,l.what)){const k=norm(l.what);counts[k]=(counts[k]||0)+1}});
       for(const [k,q] of Object.entries(missing)){shop[k]=(shop[k]||0)+q;pantry[k]=(pantry[k]||0)+q}
       for(const [k,q] of Object.entries(need)){pantry[k]=(pantry[k]||0)-q}
-      days.push({day:d,mode,rid:r.id,name:r.name,cost:Math.round(cost*100)/100,need,missing,eaters:n,serves:nextLeft?"Makes extra for tomorrow":"",locked:!!locked[d]});
+      days.push({day:d,mode,rid:r.id,name:r.name,cost:Math.round(cost*100)/100,need,missing,eaters:n,serves:nextLeft?"Makes extra for tomorrow":"",locked:!!locked[d],overrideFor:pick.kid.length?pick.kid:undefined});
       prev={day:d,name:r.name,rid:r.id,tags:r.tags||[]};
     }
     if(!best||total>best.total)best={total,days,shop,spent:Math.round((st.budget-budget)*100)/100};
@@ -319,7 +330,11 @@ function pickChoices(ws,day){
   const usedElse=new Set((p&&p.days||[]).filter(x=>x.day!==day&&x.mode!=="leftovers").map(x=>x.rid));
   return Object.entries(S.recipes).map(([id,r])=>{const w=words(r);const why=[];
     if(r.course&&r.course!=="main")why.push((COURSE_LABEL[r.course]||r.course).toLowerCase()+", not a main dish");
-    const b=blockedBy(r,eaters);if(b)why.push(b+" won't eat it");
+    const bi=blockInfo(r,eaters);
+    if(bi.allergy.length)why.push(bi.allergy.join(", ")+" "+(bi.allergy.length>1?"are":"is")+" allergic");
+    const adults=bi.hard.filter(n=>!bi.allergy.includes(n));if(adults.length)why.push(adults.join(", ")+" won't eat it");
+    if(bi.kid.length){const used=(p&&p.days||[]).filter(x=>x.day!==day&&x.overrideFor&&x.overrideFor.length).length;
+      why.push(bi.kid.join(", ")+" won't eat it ("+(used<kidPasses()?"uses this week's kid pass":"kid pass already used")+")")}
     if(mode==="quick"&&(Number(r.minutes)||30)>st.quickMax)why.push("too long for a quick night");
     st.limits.forEach(l=>{if(l.what&&hits(w,l.what)&&(counts[norm(l.what)]||0)+1>Number(l.max))why.push("over the "+l.what+" limit")});
     if(usedElse.has(id))why.push("already on another day");
@@ -433,6 +448,7 @@ function renderWeek(){
       body=`<div class="row spread"><div class="meal">${x.locked?'<span class="pin" title="Pinned">● </span>':""}${esc(x.name)}</div>
       ${x.cost?`<span class="tag cost num">+${money(x.cost)}</span>`:`<span class="tag free">In pantry</span>`}</div>
       <div class="row small muted" style="gap:6px">${r.minutes?`<span>${esc(r.minutes)} min</span>`:""}${x.eaters?`<span>· for ${x.eaters}</span>`:""}${x.serves?`<span>· ${esc(x.serves)}</span>`:""}${miss.length?`<span>· buy ${miss.map(([k,q])=>esc(qtyLabel(q,k))).join(", ")}</span>`:""}</div>
+      ${(()=>{const k=blockInfo(r,Object.keys(S.people).length?eatersFor(p,d):[]).kid;return k.length?`<div class="small" style="color:var(--butter);margin-top:2px">Kid pass: ${esc(k.join(", "))} won't love this one.</div>`:""})()}
       ${r.how?`<p class="how">${esc(r.how)}</p>`:""}
       <div class="acts">${x.cooked?`<span class="done">✓ Cooked</span>`:x.notMade?`<span class="muted small">Didn't make it</span>`:`<button data-cook="${d}" data-ws="${ws}" ${S.canWrite?"":"disabled"}>Cooked it</button>`}
       ${past?"":`<button class="ghost" data-swap="${d}" ${S.canWrite?"":"disabled"}>Swap</button><button class="ghost" data-pick="${d}" ${S.canWrite?"":"disabled"}>Pick a meal</button><button class="ghost" data-lock="${d}" ${S.canWrite?"":"disabled"}>${x.locked?"Unpin":"Pin"}</button>`}
@@ -564,7 +580,9 @@ function renderFamily(){
     h+=`<div class="card" style="display:flex;flex-direction:column;gap:10px"><label>Name<input id="pf-name-${esc(id)}" data-pf="${esc(id)}" data-k="name" value="${esc(p.name||"")}"></label>
     <label>Likes<input id="pf-likes-${esc(id)}" data-pf="${esc(id)}" data-k="likes" value="${esc((p.likes||[]).join(", "))}" placeholder="mexican, pasta, chicken"></label>
     <label>Eat less of<input id="pf-less-${esc(id)}" data-pf="${esc(id)}" data-k="less" value="${esc((p.less||[]).join(", "))}" placeholder="beef, fried"></label>
-    <label>Won't eat<input id="pf-nogo-${esc(id)}" data-pf="${esc(id)}" data-k="nogo" value="${esc((p.nogo||[]).join(", "))}" placeholder="mushrooms, spicy"></label>
+    <label>Won't eat${p.kid?" (a weekly kid pass can overrule this)":""}<input id="pf-nogo-${esc(id)}" data-pf="${esc(id)}" data-k="nogo" value="${esc((p.nogo||[]).join(", "))}" placeholder="mushrooms, spicy"></label>
+    <label>Allergies (never, no passes)<input id="pf-allergies-${esc(id)}" data-pf="${esc(id)}" data-k="allergies" value="${esc((p.allergies||[]).join(", "))}" placeholder="peanut, shellfish"></label>
+    <label style="flex-direction:row;align-items:center;gap:10px;color:var(--ink);font-size:.95rem"><input type="checkbox" data-kid="${esc(id)}" ${p.kid?"checked":""} style="width:20px;min-height:20px;accent-color:var(--accent)"> This is a kid</label>
     <label>Notes<textarea id="pf-notes-${esc(id)}" data-pf="${esc(id)}" data-k="notes" style="min-height:60px" placeholder="e.g. practice Tue and Thu, eats late; trying more veggies">${esc(p.notes||"")}</textarea></label>
     <div>${S.confirm==="ppl:"+id?`<button class="danger" data-pdel2="${esc(id)}">Yes, remove</button> <button class="ghost" data-pcancel="1">Keep</button>`:`<button class="ghost" data-pdel="${esc(id)}" ${S.canWrite?"":"disabled"}>Remove</button>`}</div></div>`;
   }
@@ -578,6 +596,7 @@ function renderRules(){
   <div class="grid3"><label>Shopping budget ($)<input id="st-budget" type="number" min="0" step="1" inputmode="decimal" value="${esc(st.budget)}"></label>
   ${Object.keys(S.people).length?`<label>People eating<input value="${Object.keys(S.people).length} (from Family)" disabled></label>`:`<label>People eating<input id="st-household" type="number" min="1" step="1" inputmode="numeric" value="${esc(st.household)}"></label>`}
   <label>Quick night max (min)<input id="st-quick" type="number" min="5" step="5" inputmode="numeric" value="${esc(st.quickMax)}"></label></div>
+  <label>Kid passes per week (meals a kid's "won't eat" can be overruled)<input id="st-kidpass" type="number" min="0" max="7" step="1" inputmode="numeric" value="${esc(kidPasses())}"></label>
   <div class="grid2"><label>Price for items with no price ($)<input id="st-dp" type="number" min="0" step="0.25" inputmode="decimal" value="${esc(st.defaultPrice)}"></label>
   <label>Dinner time (for the calendar)<input id="st-dinner" type="time" value="${esc(st.dinnerTime||"18:00")}"></label></div></div>
   <div class="card"><h2>Usual week</h2><p class="small muted" style="margin:4px 0 10px">Quick for lessons and practice nights. Leftovers eats the day before's meal, and that day's recipe is doubled.</p>
@@ -710,6 +729,7 @@ view.addEventListener("click",e=>{
   if(ds.ron!=null&&t.type==="checkbox"){S.review.rows[Number(ds.ron)].on=t.checked;return render()}
   if(ds.xdel!=null){S.review.extra.splice(Number(ds.xdel),1);return render()}
   if(t.id==="rvok")return confirmReview();
+  if(ds.kid&&t.type==="checkbox"){const id=ds.kid;const pp=Object.assign({},S.people[id],{kid:t.checked});S.people[id]=pp;render();write("people/"+id,d=>d.set(pp));return}
   if(ds.impon!=null&&t.type==="checkbox"&&S.imp){S.imp.rows[Number(ds.impon)].on=t.checked;return render()}
   if(t.id==="impok")return doImport();
   if(t.id==="impcancel"){S.imp=null;return render()}
@@ -749,7 +769,7 @@ view.addEventListener("input",e=>{
   if(t.id==="st-dinner"&&t.value){saveSettings({dinnerTime:t.value});return}
   if(ds.pf){const id=ds.pf;const p=Object.assign({},S.people[id]);p[ds.k]=(ds.k==="name"||ds.k==="notes")?t.value:list(t.value);S.people[id]=p;later("people/"+id,p,900);return}
   if(ds.lw!=null||ds.lm!=null){const st=settings();const i=Number(ds.lw!=null?ds.lw:ds.lm);st.limits=st.limits.map((l,j)=>j===i?(ds.lw!=null?{what:norm(t.value),max:l.max}:{what:l.what,max:Number(t.value)||0}):l);S.settings=st;later("settings/main",st,900);return}
-  const map={"st-budget":"budget","st-household":"household","st-quick":"quickMax","st-dp":"defaultPrice"};
+  const map={"st-budget":"budget","st-household":"household","st-quick":"quickMax","st-dp":"defaultPrice","st-kidpass":"kidPasses"};
   if(map[t.id]&&t.value!==""){saveSettings({[map[t.id]]:Number(t.value)})}
 });
 view.addEventListener("keydown",e=>{if(e.target.id==="aiNameIn"&&e.key==="Enter"){e.preventDefault();const v=e.target.value.trim();if(v)aiDraft("name",v.slice(0,80))}});
