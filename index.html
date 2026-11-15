@@ -344,7 +344,7 @@ function renderWeek(){
       const r=S.recipes[x.rid]||{};const miss=Object.entries(x.missing||{});
       body=`<div class="row spread"><div class="meal">${x.locked?'<span class="pin" title="Pinned">● </span>':""}${esc(x.name)}</div>
       ${x.cost?`<span class="tag cost num">+${money(x.cost)}</span>`:`<span class="tag free">In pantry</span>`}</div>
-      <div class="row small muted" style="gap:6px">${r.minutes?`<span>${esc(r.minutes)} min</span>`:""}${x.serves?`<span>· ${esc(x.serves)}</span>`:""}${miss.length?`<span>· buy ${miss.map(([k,q])=>esc(fmtQ(q)+" "+k)).join(", ")}</span>`:""}</div>
+      <div class="row small muted" style="gap:6px">${r.minutes?`<span>${esc(r.minutes)} min</span>`:""}${x.serves?`<span>· ${esc(x.serves)}</span>`:""}${miss.length?`<span>· buy ${miss.map(([k,q])=>esc(qtyLabel(q,k))).join(", ")}</span>`:""}</div>
       ${r.how?`<p class="how">${esc(r.how)}</p>`:""}
       <div class="acts">${x.cooked?`<span class="done">✓ Cooked</span>`:x.notMade?`<span class="muted small">Didn't make it</span>`:`<button data-cook="${d}" ${S.canWrite?"":"disabled"}>Cooked it</button>`}
       <button class="ghost" data-swap="${d}" ${S.canWrite?"":"disabled"}>Swap</button>
@@ -358,7 +358,7 @@ function renderWeek(){
     h+=`<div class="card shop"><div class="row spread"><h2>Shopping list</h2>${shop.length&&!p.bought?`<button data-bought="1" ${S.canWrite?"":"disabled"}>Bought it all</button>`:""}</div>`;
     if(!shop.length)h+=`<p class="muted">Nothing to buy. Everything's in the pantry.</p>`;
     else{
-      h+=`<div class="list">`+shop.map(([k,q])=>{const got=p.got&&p.got[k];return `<div class="li"><label><input type="checkbox" data-got="${esc(k)}" ${got?"checked":""}><span class="${got?"got":""}">${esc(fmtQ(q))} × ${esc(k)}</span></label><span class="num muted small">${money(q*priceOf(k))}</span></div>`}).join("")+`</div>`;
+      h+=`<div class="list">`+shop.map(([k,q])=>{const got=p.got&&p.got[k];return `<div class="li"><label><input type="checkbox" data-got="${esc(k)}" ${got?"checked":""}><span class="${got?"got":""}">${esc(qtyLabel(q,k))}</span></label><span class="num muted small">${money(q*priceOf(k))}</span></div>`}).join("")+`</div>`;
       h+=`<p class="small muted" style="margin:8px 0 0">${p.bought?"Added to the pantry.":"<b>Bought it all</b> adds these to the pantry. <b>Cooked it</b> takes a meal's ingredients back out."}</p>`;
     }
     h+=`</div>`;
@@ -369,22 +369,25 @@ function renderPantry(){
   const items=Object.entries(S.items).sort((a,b)=>norm(a[1].name).localeCompare(norm(b[1].name)));
   const showAll=S.pantryAll;const shown=items.filter(([,it])=>showAll||(Number(it.have)||0)>0);
   let h=`<section><div class="card"><h2>Add to the pantry</h2>
-  <form id="addItem" class="grid3" style="margin-top:10px"><label style="grid-column:1/-1">Item<input id="ni-name" placeholder="e.g. black beans" required></label>
-  <label>On hand<input id="ni-have" type="number" step="0.5" min="0" value="1" inputmode="decimal"></label>
-  <label>Price each ($)<input id="ni-price" type="number" step="0.05" min="0" inputmode="decimal" placeholder="${settings().defaultPrice}"></label>
+  <datalist id="units">${UNITS.map(u=>`<option value="${u}">`).join("")}</datalist>
+  <form id="addItem" class="grid2" style="margin-top:10px"><label style="grid-column:1/-1">Item<input id="ni-name" placeholder="e.g. ground beef" required></label>
+  <label>How many<input id="ni-have" type="number" step="0.5" min="0" value="1" inputmode="decimal"></label>
+  <label>Counted as<input id="ni-unit" list="units" placeholder="1-lb pack, pack, can…" autocomplete="off"></label>
+  <label>Price per one ($)<input id="ni-price" type="number" step="0.05" min="0" inputmode="decimal" placeholder="${settings().defaultPrice}"></label>
   <label>&nbsp;<button class="primary" ${S.canWrite?"":"disabled"}>Add</button></label></form>
-  <p class="small muted" style="margin:8px 0 0">Count in rough units: 1 onion, 1 can, 1 portion of rice. The price is what one unit costs at the store.</p></div>
+  <p class="small muted" style="margin:8px 0 0">Count things the way the store sells them: ground beef in 1-lb packs, chicken breasts or tenders by the pack, eggs by the dozen. Leave "Counted as" blank and it guesses. The price is for one of those.</p></div>
   ${(()=>{const pc=settings().pantryChecked;const days=pc?Math.floor((todayStart()-new Date(pc+"T00:00:00"))/864e5):null;
     return `<div class="card row spread"><div><h2>Pantry check</h2><div class="small muted">${pc?`Last checked ${days===0?"today":days===1?"yesterday":days+" days ago"}`:"Not checked yet"}. Walk the cupboards and fix any counts.</div></div>
     <button class="${S.pcheck?"primary":""}" id="${S.pcheck?"pdone":"pcheck"}" ${S.canWrite?"":"disabled"}>${S.pcheck?"Done checking":"Check the pantry"}</button></div>`})()}
   ${S.pcheck?`<div class="card"><h2>Type what you actually have</h2><p class="small muted" style="margin:4px 0 8px">Every item, including ones at 0. Remove anything you never buy.</p><div class="list">`+
-    items.map(([id,it])=>`<div class="li"><span style="font-weight:600;min-width:0">${esc(it.name)}</span><div class="row" style="flex-wrap:nowrap;gap:6px"><input id="have-${esc(id)}" data-have="${esc(id)}" type="number" min="0" step="0.5" inputmode="decimal" value="${esc(fmtQ(Number(it.have)||0))}" style="width:76px" aria-label="How many ${esc(it.name)}">
+    items.map(([id,it])=>`<div class="li"><span style="font-weight:600;min-width:0">${esc(it.name)}</span><div class="row" style="flex-wrap:nowrap;gap:6px"><input id="have-${esc(id)}" data-have="${esc(id)}" type="number" min="0" step="0.5" inputmode="decimal" value="${esc(fmtQ(Number(it.have)||0))}" style="width:64px" aria-label="How many ${esc(it.name)}">
+    <input id="unit-${esc(id)}" data-unit="${esc(id)}" list="units" value="${esc(it.unit||"")}" placeholder="${esc(guessUnit(it.name))}" style="width:110px" autocomplete="off" aria-label="${esc(it.name)} counted as">
     ${S.confirm==="item:"+id?`<button class="danger" data-idel2="${esc(id)}" style="min-height:34px;padding:4px 10px">Remove</button>`:`<button class="ghost" data-idel="${esc(id)}" aria-label="Remove ${esc(it.name)}" style="min-height:34px;padding:4px 10px">×</button>`}</div></div>`).join("")+`</div></div>`:""}
   <div class="card"><div class="row spread"><h2>${showAll?"Everything we buy":"On hand"}</h2><button class="ghost" id="pantryAll">${showAll?"Only what's on hand":"Show all items"}</button></div>`;
   if(!shown.length)h+=`<div class="empty">${items.length?"Nothing on hand. Tap <b>Show all items</b> to restock.":"The pantry is empty. Add what's in the cupboard above."}</div>`;
-  else h+=`<div class="list">`+shown.map(([id,it])=>`<div class="li"><div style="min-width:0"><div style="font-weight:600">${esc(it.name)}</div>
-    <div class="row small muted" style="gap:6px">$<input class="price num" data-price="${esc(id)}" type="number" step="0.05" min="0" inputmode="decimal" value="${it.price===""||it.price==null?"":esc(it.price)}" placeholder="${settings().defaultPrice}" aria-label="Price for ${esc(it.name)}"> each</div></div>
-    <div class="step"><button data-dec="${esc(id)}" aria-label="One less ${esc(it.name)}" ${S.canWrite?"":"disabled"}>−</button><span class="q">${esc(fmtQ(Number(it.have)||0))}</span><button data-inc="${esc(id)}" aria-label="One more ${esc(it.name)}" ${S.canWrite?"":"disabled"}>+</button></div></div>`).join("")+`</div>`;
+  else h+=`<div class="list">`+shown.map(([id,it])=>{const u=it.unit||guessUnit(it.name);return `<div class="li"><div style="min-width:0"><div style="font-weight:600">${esc(it.name)} <span class="small muted" style="font-weight:400">${u&&u!=="each"?"· "+esc(plural(u,Number(it.have)||0)||u):""}</span></div>
+    <div class="row small muted" style="gap:6px">$<input class="price num" id="price-${esc(id)}" data-price="${esc(id)}" type="number" step="0.05" min="0" inputmode="decimal" value="${it.price===""||it.price==null?"":esc(it.price)}" placeholder="${settings().defaultPrice}" aria-label="Price for ${esc(it.name)}"> per ${esc(u==="each"?"one":u)}</div></div>
+    <div class="step"><button data-dec="${esc(id)}" aria-label="One less ${esc(it.name)}" ${S.canWrite?"":"disabled"}>−</button><span class="q">${esc(fmtQ(Number(it.have)||0))}</span><button data-inc="${esc(id)}" aria-label="One more ${esc(it.name)}" ${S.canWrite?"":"disabled"}>+</button></div></div>`}).join("")+`</div>`;
   h+=`</div>`;
   if(items.length)h+=`<div class="card" style="display:flex;flex-direction:column;gap:8px"><h2>Start fresh</h2>
     <p class="small muted" style="margin:0">Zero the counts keeps the item list and prices, so you can count from scratch. Empty the pantry deletes every item; recipes add items back as you save them.</p>
@@ -392,10 +395,29 @@ function renderPantry(){
     ${S.confirm==="wipe"?`<button class="danger" id="wipe2">Yes, delete ${items.length} items</button><button class="ghost" id="cancelc">Cancel</button>`:`<button class="danger" id="wipe" ${S.canWrite?"":"disabled"}>Empty the pantry</button>`}</div></div>`;
   return h+`</section>`;
 }
-function ingText(r){return Object.entries(r.ingredients||{}).map(([k,q])=>fmtQ(Number(q)||1)+" "+k).join("\n")}
-function parseIng(t){const out={};String(t||"").split(/\n|;/).forEach(line=>{line=line.trim();if(!line)return;let m=line.match(/^([\d.\/]+)\s*(?:x\s+)?(.+)$/i);let q=1,n=line;
+/* ---------- units: how an item is counted (1-lb pack, pack, can, dozen…) ---------- */
+const UNITS=["each","1-lb pack","2-lb pack","pack","family pack","lb","can","jar","bottle","bag","box","dozen","loaf","bunch","head","portion"];
+function guessUnit(name){const n=norm(name);
+  if(/ground (beef|turkey|pork|chicken)|sausage|bacon|hot dogs?|stew meat|ground/.test(n))return "1-lb pack";
+  if(/chicken|tenders?|thighs?|drumsticks?|wings?|pork chops?|chops?|steaks?|roast|ribs?|salmon|fish|shrimp|tilapia|cutlets?/.test(n))return "pack";
+  if(/^eggs?$/.test(n))return "dozen";
+  if(/canned|beans|tomato sauce|soup|broth|coconut milk|tuna|corn$/.test(n))return "can";
+  if(/rice|pasta|spaghetti|noodles|lentils|flour|sugar|chips|frozen/.test(n))return "bag";
+  if(/bread|buns?|rolls?$/.test(n))return "loaf";
+  if(/sauce|ketchup|mustard|mayo|dressing|oil|salsa|curry paste|peanut butter|jam/.test(n))return "jar";
+  if(/cheese|tortillas|cereal|crackers/.test(n))return "pack";
+  return "each"}
+function unitOf(name){const it=S.items[slug(name)];return (it&&it.unit)||guessUnit(name)}
+function plural(u,q){if(!u||u==="each")return "";if(Math.abs(q-1)<1e-9)return u;if(/(s|lb|dozen)$/.test(u))return u;if(/(x|ch|sh)$/.test(u))return u+"es";return u.replace(/^(.*?)(pack)$/,"$1packs").replace(/^(.*[^s])$/,"$1s")}
+function qtyLabel(q,name){const u=plural(unitOf(name),q);return fmtQ(q)+" × "+name+(u?" ("+u+")":"")}
+const UNIT_RE=/^(\d+(?:\.\d+)?\s*-?\s*(?:lb|oz)\.?\s+(?:packs?|packages?|pkgs?)|family packs?|packs?|packages?|pkgs?|lbs?\.?|pounds?|cans?|jars?|bottles?|bags?|boxes|box|dozen|loaf|loaves|bunch(?:es)?|heads?|each|portions?)\b\s*(?:of\s+)?/i;
+function normUnit(u){u=norm(u).replace(/\s+/g," ");if(/^\d/.test(u))return u.replace(/\s*-?\s*(lb|oz)\.?\s+(packs?|packages?|pkgs?)/,"-$1 pack");
+  return ({packs:"pack",package:"pack",packages:"pack",pkg:"pack",pkgs:"pack",lbs:"lb","lb.":"lb",pound:"lb",pounds:"lb",cans:"can",jars:"jar",bottles:"bottle",bags:"bag",boxes:"box",loaves:"loaf",bunches:"bunch",heads:"head",portions:"portion","family packs":"family pack"})[u]||u}
+function ingText(r){return Object.entries(r.ingredients||{}).map(([k,q])=>{q=Number(q)||1;const u=(r.units&&r.units[k])||unitOf(k);return fmtQ(q)+" "+(u&&u!=="each"?plural(u,q)+" ":"")+k}).join("\n")}
+function parseIng(t){const out={},units={};String(t||"").split(/\n|;/).forEach(line=>{line=line.trim();if(!line)return;let m=line.match(/^([\d.\/]+)\s*(?:x\s+)?(.+)$/i);let q=1,n=line;
   if(m){n=m[2];q=m[1].includes("/")?m[1].split("/").reduce((a,b)=>Number(a)/Number(b)):Number(m[1])}else if((m=line.match(/^(.+?)\s+x?\s*([\d.]+)$/i))){n=m[1];q=Number(m[2])}
-  n=norm(n);if(n)out[n]=(out[n]||0)+(q>0?q:1)});return out}
+  let u="";const um=n.match(UNIT_RE);if(um){u=normUnit(um[1]);n=n.slice(um[0].length)}
+  n=norm(n);if(n){out[n]=(out[n]||0)+(q>0?q:1);if(u)units[n]=u}});return {ing:out,units}}
 function renderRecipes(){
   const st=settings();const people=Object.values(S.people);
   const recs=Object.entries(S.recipes).sort((a,b)=>norm(a[1].name).localeCompare(norm(b[1].name)));
@@ -478,7 +500,7 @@ function aiPrompt(kind,name){
   return task+`
 
 Rules:
-- Ingredients use rough store units, so a pantry count can match: 1 onion, 1 can, 1 lb meat, 1 package, 1 portion of rice or pasta. Leave out salt, pepper, oil and water.
+- Count ingredients the way a US grocery store sells them, so a pantry count can match. Give each a "unit": ground meat in "1-lb pack", chicken breasts/tenders/thighs and other meat by the "pack", eggs by the "dozen", canned goods by the "can", rice/pasta by the "bag", produce "each" (1 onion). qty is how many of that unit the recipe uses (it may be 0.5). Leave out salt, pepper, oil and water.
 - Reuse these pantry item names exactly when they fit: ${have||"(none yet)"}.
 - Item names: lowercase, singular-ish, no brand names.
 - serves: the recipe's own yield (the household eats ${st.household}).
@@ -488,7 +510,7 @@ Rules:
 - price_each: rough US grocery price in dollars for one unit of each ingredient.
 
 Reply with only this JSON:
-{"name":"Chicken Tacos","minutes":20,"serves":4,"tags":["mexican","chicken","quick"],"ingredients":[{"item":"chicken breast","qty":1,"price_each":3.5},{"item":"tortillas","qty":8,"price_each":0.25}],"how":"Cook sliced chicken with chili spices; serve in warm tortillas."}`;
+{"name":"Chicken Tacos","minutes":20,"serves":4,"tags":["mexican","chicken","quick"],"ingredients":[{"item":"chicken breast","qty":1,"unit":"pack","price_each":9},{"item":"tortillas","qty":1,"unit":"pack","price_each":3},{"item":"onion","qty":1,"unit":"each","price_each":0.8}],"how":"Cook sliced chicken with chili spices; serve in warm tortillas."}`;
 }
 async function aiDraft(kind,payload){
   if(!S.sample||(S.ai&&S.ai.busy))return;
@@ -498,9 +520,9 @@ async function aiDraft(kind,payload){
     const opt={signal:ctl.signal};if(kind==="photo")opt.images=payload;
     const j=await S.sample.json(aiPrompt(kind,kind==="name"?payload:""),opt);
     if(!j||typeof j!=="object"||j.error||!j.name)throw{code:"refused"};
-    const ing={},prices={};
-    (Array.isArray(j.ingredients)?j.ingredients:[]).forEach(x=>{const n=norm(x&&x.item);if(!n)return;ing[n]=(ing[n]||0)+(Number(x.qty)>0?Number(x.qty):1);if(Number(x.price_each)>0)prices[n]=Math.round(Number(x.price_each)*100)/100});
-    S.edit={draft:{name:String(j.name).slice(0,80),minutes:Number(j.minutes)||"",serves:Number(j.serves)||settings().household,tags:(Array.isArray(j.tags)?j.tags:[]).map(norm).filter(Boolean).slice(0,6),ingredients:ing,how:String(j.how||"").slice(0,600),prices,from:kind==="photo"?"your photo":"the name"}};
+    const ing={},prices={},units={};
+    (Array.isArray(j.ingredients)?j.ingredients:[]).forEach(x=>{const n=norm(x&&x.item);if(!n)return;ing[n]=(ing[n]||0)+(Number(x.qty)>0?Number(x.qty):1);if(Number(x.price_each)>0)prices[n]=Math.round(Number(x.price_each)*100)/100;if(x.unit)units[n]=normUnit(String(x.unit))});
+    S.edit={draft:{name:String(j.name).slice(0,80),minutes:Number(j.minutes)||"",serves:Number(j.serves)||settings().household,tags:(Array.isArray(j.tags)?j.tags:[]).map(norm).filter(Boolean).slice(0,6),ingredients:ing,units,how:String(j.how||"").slice(0,600),prices,from:kind==="photo"?"your photo":"the name"}};
     S.ai=null;render();window.scrollTo(0,0);
   }catch(e){
     const code=e&&e.code;S.ai=code==="cancelled"?null:{err:AI_ERR[code]||"Something went wrong reaching Claude. Try again."};
@@ -574,6 +596,7 @@ view.addEventListener("click",e=>{
 });
 view.addEventListener("input",e=>{
   const t=e.target,ds=t.dataset;
+  if(ds.unit){const id=ds.unit;const it=Object.assign({},S.items[id],{unit:normUnit(t.value)});S.items[id]=it;later("items/"+id,it,1200);return}
   if(ds.have){const id=ds.have;if(t.value==="")return;const it=Object.assign({},S.items[id],{have:Math.max(0,Number(t.value)||0)});S.items[id]=it;later("items/"+id,it,900);return}
   if(ds.price){const id=ds.price;const it=Object.assign({},S.items[id],{price:t.value===""?"":Number(t.value)});S.items[id]=it;later("items/"+id,it,900);return}
   if(ds.pf){const id=ds.pf;const p=Object.assign({},S.people[id]);p[ds.k]=ds.k==="name"?t.value:list(t.value);S.people[id]=p;later("people/"+id,p,900);return}
@@ -587,14 +610,17 @@ view.addEventListener("change",e=>{const t=e.target;
   if(t.dataset.dm){const st=settings();st.days[t.dataset.dm]=t.value;S.settings=st;later("settings/main",st,300)}});
 view.addEventListener("submit",e=>{
   e.preventDefault();const f=e.target;
-  if(f.id==="addItem"){const name=norm($("#ni-name").value);if(!name)return;const id=slug(name);const old=S.items[id];const pv=$("#ni-price").value;
-    const it={name,have:Math.round(((old?Number(old.have)||0:0)+(Number($("#ni-have").value)||0))*100)/100,price:pv===""?(old?old.price:""):Number(pv)};
+  if(f.id==="addItem"){const name=norm($("#ni-name").value);if(!name)return;const id=slug(name);const old=S.items[id];const pv=$("#ni-price").value;const uv=normUnit($("#ni-unit").value||"");
+    const it={name,unit:uv||(old&&old.unit)||guessUnit(name),have:Math.round(((old?Number(old.have)||0:0)+(Number($("#ni-have").value)||0))*100)/100,price:pv===""?(old?old.price:""):Number(pv)};
     S.items[id]=it;render();write("items/"+id,d=>d.set(it));const n=$("#ni-name");if(n)n.focus();return}
   if(f.id==="recForm"){const name=$("#rf-name").value.trim();if(!name)return;const id=S.edit.id||slug(name);
-    const r={name,minutes:Number($("#rf-min").value)||"",serves:Number($("#rf-serves").value)||settings().household,tags:list($("#rf-tags").value),ingredients:parseIng($("#rf-ing").value),how:$("#rf-how").value.trim()};
+    const P=parseIng($("#rf-ing").value);
+    const r={name,minutes:Number($("#rf-min").value)||"",serves:Number($("#rf-serves").value)||settings().household,tags:list($("#rf-tags").value),ingredients:P.ing,how:$("#rf-how").value.trim()};
     const prices=(S.edit.draft&&S.edit.draft.prices)||{};
     S.recipes[id]=r;S.edit=null;render();write("recipes/"+id,d=>d.set(r));
-    Object.keys(r.ingredients).forEach(k=>{const iid=slug(k);if(S.items[iid])return;const it={name:k,have:0,price:prices[k]!=null?prices[k]:""};S.items[iid]=it;write("items/"+iid,d=>d.set(it))});
+    Object.keys(r.ingredients).forEach(k=>{const iid=slug(k);const old=S.items[iid];
+      if(old){if(P.units[k]&&!old.unit){const it=Object.assign({},old,{unit:P.units[k]});S.items[iid]=it;write("items/"+iid,d=>d.set(it))}return}
+      const it={name:k,have:0,unit:P.units[k]||guessUnit(k),price:prices[k]!=null?prices[k]:""};S.items[iid]=it;write("items/"+iid,d=>d.set(it))});
     return}
 });
 
