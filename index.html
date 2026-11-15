@@ -531,11 +531,13 @@ function renderRecipes(){
     ${e.id?(S.confirm==="rec:"+e.id?`<button type="button" class="danger" id="rf-del2">Yes, delete it</button>`:`<button type="button" class="danger" id="rf-del">Delete</button>`):""}</div></form></div>`;
     return h+`</section>`;
   }
+  if(S.imp)return h+renderImport()+`</section>`;
   const ai=S.ai||{};const dis=S.canWrite&&!ai.busy?"":"disabled";
   h+=`<div class="card" style="display:flex;flex-direction:column;gap:10px"><h2>Add a recipe</h2>
   ${S.sample?`<div class="row" style="flex-wrap:nowrap"><input id="aiNameIn" placeholder="Just a name: burgers, grilled chicken…" aria-label="Meal name" style="min-width:0" ${dis}><button class="primary" id="aiName" ${dis}>Fill it in</button></div>
   ${S.canPhoto?`<label class="btn" style="flex-direction:row;justify-content:center;align-items:center;color:var(--ink);font-size:.92rem;font-weight:600;cursor:pointer;${ai.busy?"opacity:.5;pointer-events:none":""}">Add from photo<input id="aiPhoto" type="file" accept="image/*" multiple hidden ${dis}></label>`:""}`:""}
   <button id="newRec" ${dis}>Type it in myself</button>
+  <label class="btn" style="flex-direction:row;justify-content:center;align-items:center;color:var(--ink);font-size:.92rem;font-weight:600;cursor:pointer">Import recipes from a file<input id="impFile" type="file" accept=".json,application/json" hidden ${dis}></label>
   ${ai.busy?`<div class="row spread note"><span>${esc(ai.msg)}</span><button class="ghost" id="aiStop" style="min-height:32px;padding:4px 10px">Stop</button></div>`:""}
   ${ai.err?`<div class="warnbox">${esc(ai.err)}</div>`:""}
   ${S.sample?`<p class="small muted" style="margin:0">Photo and name ask Claude for a draft (about a cent a photo). Nothing saves until you check it and tap Save.</p>`:""}</div>
@@ -647,6 +649,30 @@ function aiClient(endpoint){return{json:async(prompt,opt)=>{
   try{return JSON.parse(t.slice(a,b+1))}catch(_){throw {code:"invalid_json"}}
 }}}
 
+/* ---------- import recipes from a file (e.g. ones Claude typed up from photos) ---------- */
+function readImport(text){
+  let j;try{j=JSON.parse(text)}catch(_){throw new Error("That file isn't a recipe file (it isn't valid JSON).")}
+  const arr=Array.isArray(j)?j:(j&&Array.isArray(j.recipes)?j.recipes:null);if(!arr||!arr.length)throw new Error("No recipes found in that file.");
+  return arr.filter(x=>x&&x.name).map(x=>{const ing={},units={},prices={};
+    (Array.isArray(x.ingredients)?x.ingredients:[]).forEach(i=>{if(typeof i==="string"){const P=parseIng(i);Object.assign(ing,P.ing);Object.assign(units,P.units);return}
+      const n=norm(i&&i.item);if(!n)return;ing[n]=(ing[n]||0)+(Number(i.qty)>0?Number(i.qty):1);if(i.unit)units[n]=normUnit(String(i.unit));if(Number(i.price_each)>0)prices[n]=Math.round(Number(i.price_each)*100)/100});
+    const r={name:String(x.name).trim().slice(0,80),minutes:Number(x.minutes)||"",serves:Number(x.serves)||householdSize(),tags:(Array.isArray(x.tags)?x.tags:list(x.tags)).map(norm).filter(Boolean).slice(0,8),ingredients:ing,how:String(x.how||"").trim().slice(0,1500)};
+    if(x.source)r.source=String(x.source).slice(0,120);if(x.note)r.note=String(x.note).slice(0,300);
+    const id=slug(r.name);return {id,r,units,prices,exists:!!S.recipes[id],on:!S.recipes[id]}})}
+function renderImport(){const I=S.imp;const n=I.rows.filter(x=>x.on).length;
+  return `<div class="card" style="display:flex;flex-direction:column;gap:8px"><h2>Import ${I.rows.length} recipe${I.rows.length===1?"":"s"}</h2>
+  <p class="small muted" style="margin:0">From <b>${esc(I.file)}</b>. Untick any you don't want. Ones you already have are unticked; tick them to replace yours. Tap a name to see the ingredients.</p></div>
+  <div class="card"><div class="list">${I.rows.map((x,i)=>`<div class="li" style="align-items:start"><label style="flex-direction:row;align-items:start;gap:10px;color:var(--ink);font-size:.95rem;font-weight:400;min-width:0"><input type="checkbox" data-impon="${i}" ${x.on?"checked":""} style="width:20px;min-height:20px;margin-top:3px;accent-color:var(--accent)">
+    <details style="min-width:0"><summary style="cursor:pointer"><b>${esc(x.r.name)}</b> ${x.exists?`<span class="small" style="color:var(--butter)">· already in your book</span>`:""}<br><span class="small muted">${x.r.minutes?esc(x.r.minutes)+" min · ":""}serves ${esc(x.r.serves)} · ${Object.keys(x.r.ingredients).length} ingredients${x.r.tags.length?" · "+esc(x.r.tags.join(", ")):""}</span></summary>
+    <div class="small" style="margin-top:6px;white-space:pre-line">${esc(ingText({ingredients:x.r.ingredients,units:x.units}))}</div>${x.r.how?`<p class="how">${esc(x.r.how)}</p>`:""}${x.r.note?`<p class="small" style="color:var(--butter);margin:4px 0 0">${esc(x.r.note)}</p>`:""}</details></label></div>`).join("")}</div></div>
+  <div class="row"><button class="primary" id="impok" ${n&&S.canWrite?"":"disabled"}>Import ${n} recipe${n===1?"":"s"}</button><button class="ghost" id="impcancel">Cancel</button></div>`}
+async function doImport(){const I=S.imp;if(!I)return;const rows=I.rows.filter(x=>x.on);S.imp=null;render();
+  for(const x of rows){S.recipes[x.id]=x.r;await write("recipes/"+x.id,d=>d.set(x.r));
+    for(const k of Object.keys(x.r.ingredients)){const iid=slug(k);const old=S.items[iid];
+      if(old){if(x.units[k]&&!old.unit){const it=Object.assign({},old,{unit:x.units[k]});S.items[iid]=it;await write("items/"+iid,d=>d.set(it))}continue}
+      const it={name:k,have:0,unit:x.units[k]||guessUnit(k),price:x.prices[k]!=null?x.prices[k]:""};S.items[iid]=it;await write("items/"+iid,d=>d.set(it))}}
+  setSync("Imported "+rows.length+" recipe"+(rows.length===1?"":"s"));render()}
+
 /* ---------- first run: load the starter recipes and pantry ---------- */
 async function loadStarter(){
   const seed=window.PP_SEED;if(!seed||!S.db)return;S.seeding=true;render();
@@ -677,6 +703,9 @@ view.addEventListener("click",e=>{
   if(ds.ron!=null&&t.type==="checkbox"){S.review.rows[Number(ds.ron)].on=t.checked;return render()}
   if(ds.xdel!=null){S.review.extra.splice(Number(ds.xdel),1);return render()}
   if(t.id==="rvok")return confirmReview();
+  if(ds.impon!=null&&t.type==="checkbox"&&S.imp){S.imp.rows[Number(ds.impon)].on=t.checked;return render()}
+  if(t.id==="impok")return doImport();
+  if(t.id==="impcancel"){S.imp=null;return render()}
   if(t.id==="rvcancel"){S.review=null;return render()}
   if(t.id==="pcheck"){S.pcheck=true;S.pantryAll=true;return render()}
   if(t.id==="pdone"){S.pcheck=false;S.confirm=null;saveSettings({pantryChecked:isoDay(new Date())});return render()}
@@ -718,6 +747,7 @@ view.addEventListener("input",e=>{
 });
 view.addEventListener("keydown",e=>{if(e.target.id==="aiNameIn"&&e.key==="Enter"){e.preventDefault();const v=e.target.value.trim();if(v)aiDraft("name",v.slice(0,80))}});
 view.addEventListener("change",e=>{const t=e.target;
+  if(t.id==="impFile"&&t.files&&t.files[0]){const f=t.files[0];f.text().then(txt=>{try{S.imp={file:f.name,rows:readImport(txt)};S.ai=null}catch(err){S.ai={err:err.message}}render();window.scrollTo(0,0)});return}
   if(t.id==="aiPhoto"&&t.files&&t.files.length){const files=Array.from(t.files).slice(0,S.maxImages||4);aiDraft("photo",files);return}
   if(t.dataset.dm){const st=settings();st.days[t.dataset.dm]=t.value;S.settings=st;later("settings/main",st,300)}});
 view.addEventListener("submit",e=>{
