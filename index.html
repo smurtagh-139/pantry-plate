@@ -258,9 +258,17 @@ function planWeek(opt){
   }
   return best;
 }
+/* dates: a plan covers Mon-Sun; made on Sat/Sun means next week */
+const isoDay=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+function weekStartFor(when){const m=new Date(when);m.setHours(0,0,0,0);const dow=(m.getDay()+6)%7;m.setDate(m.getDate()+(dow>=5?7-dow:-dow));return m}
+function dateOf(p,day){const s=p.weekStart?new Date(p.weekStart+"T00:00:00"):weekStartFor(p.made);s.setDate(s.getDate()+DAYS.indexOf(day));return s}
+function todayStart(){const t=new Date();t.setHours(0,0,0,0);return t}
+function pendingAsks(p){if(!p)return[];const t=todayStart();const st=settings();
+  return (p.days||[]).filter(x=>x.rid&&x.mode!=="leftovers"&&x.mode!=="skip"&&!x.cooked&&!x.notMade&&(st.days[x.day]||"cook")===x.mode&&dateOf(p,x.day)<t)}
 function savePlan(res){
-  const st=settings();
-  const doc={made:new Date().toISOString(),budget:st.budget,spent:res.spent,days:res.days,shop:res.shop,got:{},bought:false};
+  const st=settings();const ws=isoDay(weekStartFor(new Date()));const old=S.plan;const t=todayStart();
+  if(old&&old.weekStart===ws){res.days=res.days.map(x=>{const o=(old.days||[]).find(d=>d.day===x.day);return o&&dateOf(old,x.day)<t?o:x})}
+  const doc={made:new Date().toISOString(),weekStart:ws,budget:st.budget,spent:res.spent,days:res.days,shop:res.shop,got:{},bought:false};
   S.plan=doc;render();
   return write("plans/current",d=>d.set(doc));
 }
@@ -286,6 +294,9 @@ async function cooked(day){
   }
   render();
 }
+function notMade(day){const p=JSON.parse(JSON.stringify(S.plan));const x=p.days.find(d=>d.day===day);if(!x)return;x.notMade=true;S.plan=p;render();write("plans/current",d=>d.set(p))}
+async function pantryAll(fn){const ids=Object.keys(S.items);for(const id of ids){const it=S.items[id];const next=fn(it);
+  if(next===null){delete S.items[id];await write("items/"+id,d=>d.delete())}else{S.items[id]=next;await write("items/"+id,d=>d.set(next))}}S.confirm=null;render()}
 async function boughtAll(){
   const p=JSON.parse(JSON.stringify(S.plan));if(p.bought)return;
   p.bought=true;S.plan=p;render();await write("plans/current",d=>d.set(p));
@@ -316,6 +327,11 @@ function renderWeek(){
   <button class="primary" id="make" ${S.canWrite?"":"disabled"}>${p?"Re-plan":"Make my week"}</button></div>
   ${p?`<div style="margin-top:12px"><div class="row spread small"><span>Shopping <b class="num">${money(spent)}</b> of <span class="num">${money(budget)}</span></span><span class="muted num">${money(Math.max(0,budget-spent))} left</span></div><div class="meter ${spent>budget?"over":""}" style="margin-top:6px"><i style="width:${pct}%"></i></div></div>`:""}
   <p class="small muted" style="margin:10px 0 0">Tap a day's label to switch it between Cook, Quick, Leftovers and Off. Pinned meals stay put when you re-plan.</p></div>`;
+  for(const x of pendingAsks(p)){
+    const dd=dateOf(p,x.day).toLocaleDateString(undefined,{weekday:"long"});
+    h+=`<div class="card warnbox" style="display:flex;flex-direction:column;gap:8px"><div><b>Did you make ${esc(dd)}'s ${esc(x.name)}?</b><div class="small muted">Yes takes its ingredients out of the pantry. No leaves the pantry alone.</div></div>
+    <div class="row"><button class="primary" data-cook="${x.day}" ${S.canWrite?"":"disabled"}>Yes, made it</button><button class="ghost" data-notmade="${x.day}" ${S.canWrite?"":"disabled"}>No</button></div></div>`;
+  }
   const byDay={};(p&&p.days||[]).forEach(x=>byDay[x.day]=x);
   for(const d of DAYS){
     const mode=st.days[d]||"cook";const x=byDay[d];
@@ -330,11 +346,12 @@ function renderWeek(){
       ${x.cost?`<span class="tag cost num">+${money(x.cost)}</span>`:`<span class="tag free">In pantry</span>`}</div>
       <div class="row small muted" style="gap:6px">${r.minutes?`<span>${esc(r.minutes)} min</span>`:""}${x.serves?`<span>· ${esc(x.serves)}</span>`:""}${miss.length?`<span>· buy ${miss.map(([k,q])=>esc(fmtQ(q)+" "+k)).join(", ")}</span>`:""}</div>
       ${r.how?`<p class="how">${esc(r.how)}</p>`:""}
-      <div class="acts">${x.cooked?`<span class="done">✓ Cooked</span>`:`<button data-cook="${d}" ${S.canWrite?"":"disabled"}>Cooked it</button>`}
+      <div class="acts">${x.cooked?`<span class="done">✓ Cooked</span>`:x.notMade?`<span class="muted small">Didn't make it</span>`:`<button data-cook="${d}" ${S.canWrite?"":"disabled"}>Cooked it</button>`}
       <button class="ghost" data-swap="${d}" ${S.canWrite?"":"disabled"}>Swap</button>
       <button class="ghost" data-lock="${d}" ${S.canWrite?"":"disabled"}>${x.locked?"Unpin":"Pin"}</button></div>`;
     } else body=`<div class="muted">Nothing fits the rules and budget. Leftovers or eat out?</div><div class="acts"><button class="ghost" data-swap="${d}">Try again</button></div>`;
-    h+=`<div class="card day"><div class="dname">${d}<small><button class="chip ${mode}" data-mode="${d}" aria-label="${d}: ${MODE_LABEL[mode]}. Tap to change">${MODE_LABEL[mode]}</button></small></div><div style="min-width:0">${body}</div></div>`;
+    const dlabel=p?dateOf(p,d).toLocaleDateString(undefined,{month:"numeric",day:"numeric"}):"";
+    h+=`<div class="card day"><div class="dname">${d}${dlabel?`<small style="margin-top:2px">${esc(dlabel)}</small>`:""}<small><button class="chip ${mode}" data-mode="${d}" aria-label="${d}: ${MODE_LABEL[mode]}. Tap to change">${MODE_LABEL[mode]}</button></small></div><div style="min-width:0">${body}</div></div>`;
   }
   if(p){
     const shop=Object.entries(p.shop||{}).sort();
@@ -357,12 +374,23 @@ function renderPantry(){
   <label>Price each ($)<input id="ni-price" type="number" step="0.05" min="0" inputmode="decimal" placeholder="${settings().defaultPrice}"></label>
   <label>&nbsp;<button class="primary" ${S.canWrite?"":"disabled"}>Add</button></label></form>
   <p class="small muted" style="margin:8px 0 0">Count in rough units: 1 onion, 1 can, 1 portion of rice. The price is what one unit costs at the store.</p></div>
+  ${(()=>{const pc=settings().pantryChecked;const days=pc?Math.floor((todayStart()-new Date(pc+"T00:00:00"))/864e5):null;
+    return `<div class="card row spread"><div><h2>Pantry check</h2><div class="small muted">${pc?`Last checked ${days===0?"today":days===1?"yesterday":days+" days ago"}`:"Not checked yet"}. Walk the cupboards and fix any counts.</div></div>
+    <button class="${S.pcheck?"primary":""}" id="${S.pcheck?"pdone":"pcheck"}" ${S.canWrite?"":"disabled"}>${S.pcheck?"Done checking":"Check the pantry"}</button></div>`})()}
+  ${S.pcheck?`<div class="card"><h2>Type what you actually have</h2><p class="small muted" style="margin:4px 0 8px">Every item, including ones at 0. Remove anything you never buy.</p><div class="list">`+
+    items.map(([id,it])=>`<div class="li"><span style="font-weight:600;min-width:0">${esc(it.name)}</span><div class="row" style="flex-wrap:nowrap;gap:6px"><input id="have-${esc(id)}" data-have="${esc(id)}" type="number" min="0" step="0.5" inputmode="decimal" value="${esc(fmtQ(Number(it.have)||0))}" style="width:76px" aria-label="How many ${esc(it.name)}">
+    ${S.confirm==="item:"+id?`<button class="danger" data-idel2="${esc(id)}" style="min-height:34px;padding:4px 10px">Remove</button>`:`<button class="ghost" data-idel="${esc(id)}" aria-label="Remove ${esc(it.name)}" style="min-height:34px;padding:4px 10px">×</button>`}</div></div>`).join("")+`</div></div>`:""}
   <div class="card"><div class="row spread"><h2>${showAll?"Everything we buy":"On hand"}</h2><button class="ghost" id="pantryAll">${showAll?"Only what's on hand":"Show all items"}</button></div>`;
   if(!shown.length)h+=`<div class="empty">${items.length?"Nothing on hand. Tap <b>Show all items</b> to restock.":"The pantry is empty. Add what's in the cupboard above."}</div>`;
   else h+=`<div class="list">`+shown.map(([id,it])=>`<div class="li"><div style="min-width:0"><div style="font-weight:600">${esc(it.name)}</div>
     <div class="row small muted" style="gap:6px">$<input class="price num" data-price="${esc(id)}" type="number" step="0.05" min="0" inputmode="decimal" value="${it.price===""||it.price==null?"":esc(it.price)}" placeholder="${settings().defaultPrice}" aria-label="Price for ${esc(it.name)}"> each</div></div>
     <div class="step"><button data-dec="${esc(id)}" aria-label="One less ${esc(it.name)}" ${S.canWrite?"":"disabled"}>−</button><span class="q">${esc(fmtQ(Number(it.have)||0))}</span><button data-inc="${esc(id)}" aria-label="One more ${esc(it.name)}" ${S.canWrite?"":"disabled"}>+</button></div></div>`).join("")+`</div>`;
-  return h+`</div></section>`;
+  h+=`</div>`;
+  if(items.length)h+=`<div class="card" style="display:flex;flex-direction:column;gap:8px"><h2>Start fresh</h2>
+    <p class="small muted" style="margin:0">Zero the counts keeps the item list and prices, so you can count from scratch. Empty the pantry deletes every item; recipes add items back as you save them.</p>
+    <div class="row">${S.confirm==="zero"?`<button class="danger" id="zero2">Yes, set all to 0</button><button class="ghost" id="cancelc">Cancel</button>`:`<button id="zero" ${S.canWrite?"":"disabled"}>Zero the counts</button>`}
+    ${S.confirm==="wipe"?`<button class="danger" id="wipe2">Yes, delete ${items.length} items</button><button class="ghost" id="cancelc">Cancel</button>`:`<button class="danger" id="wipe" ${S.canWrite?"":"disabled"}>Empty the pantry</button>`}</div></div>`;
+  return h+`</section>`;
 }
 function ingText(r){return Object.entries(r.ingredients||{}).map(([k,q])=>fmtQ(Number(q)||1)+" "+k).join("\n")}
 function parseIng(t){const out={};String(t||"").split(/\n|;/).forEach(line=>{line=line.trim();if(!line)return;let m=line.match(/^([\d.\/]+)\s*(?:x\s+)?(.+)$/i);let q=1,n=line;
@@ -511,6 +539,16 @@ view.addEventListener("click",e=>{
   const t=e.target.closest("button,input[type=checkbox]");if(!t)return;const ds=t.dataset;
   if(t.id==="make")return makeWeek();
   if(t.id==="starter")return loadStarter();
+  if(ds.notmade)return notMade(ds.notmade);
+  if(t.id==="pcheck"){S.pcheck=true;S.pantryAll=true;return render()}
+  if(t.id==="pdone"){S.pcheck=false;S.confirm=null;saveSettings({pantryChecked:isoDay(new Date())});return render()}
+  if(ds.idel){S.confirm="item:"+ds.idel;return render()}
+  if(ds.idel2){const id=ds.idel2;delete S.items[id];S.confirm=null;render();write("items/"+id,d=>d.delete());return}
+  if(t.id==="zero"){S.confirm="zero";return render()}
+  if(t.id==="wipe"){S.confirm="wipe";return render()}
+  if(t.id==="cancelc"){S.confirm=null;return render()}
+  if(t.id==="zero2")return pantryAll(it=>Object.assign({},it,{have:0}));
+  if(t.id==="wipe2")return pantryAll(()=>null);
   if(t.id==="signout"){if(window.ppSignOut)window.ppSignOut();return}
   if(ds.swap)return swapDay(ds.swap);
   if(ds.lock)return toggleLock(ds.lock);
@@ -536,6 +574,7 @@ view.addEventListener("click",e=>{
 });
 view.addEventListener("input",e=>{
   const t=e.target,ds=t.dataset;
+  if(ds.have){const id=ds.have;if(t.value==="")return;const it=Object.assign({},S.items[id],{have:Math.max(0,Number(t.value)||0)});S.items[id]=it;later("items/"+id,it,900);return}
   if(ds.price){const id=ds.price;const it=Object.assign({},S.items[id],{price:t.value===""?"":Number(t.value)});S.items[id]=it;later("items/"+id,it,900);return}
   if(ds.pf){const id=ds.pf;const p=Object.assign({},S.people[id]);p[ds.k]=ds.k==="name"?t.value:list(t.value);S.people[id]=p;later("people/"+id,p,900);return}
   if(ds.lw!=null||ds.lm!=null){const st=settings();const i=Number(ds.lw!=null?ds.lw:ds.lm);st.limits=st.limits.map((l,j)=>j===i?(ds.lw!=null?{what:norm(t.value),max:l.max}:{what:l.what,max:Number(t.value)||0}):l);S.settings=st;later("settings/main",st,900);return}
@@ -574,7 +613,7 @@ render();
   const coll=(name,key)=>db.collection(name).onSnapshot(snap=>{const m={};snap.docs.forEach(d=>m[d.id]=d.data());
     const pend=Object.keys(timers).some(p=>p.startsWith(name+"/"));
     if(!pend||!snap.metadata.hasPendingWrites)S[key]=m;
-    done(name,snap);if(!(S.tab==="family"||S.tab==="rules"||S.edit)||!document.activeElement||document.activeElement===document.body)render()},fail);
+    done(name,snap);if(!(S.tab==="family"||S.tab==="rules"||S.edit||S.pcheck)||!document.activeElement||document.activeElement===document.body)render()},fail);
   coll("items","items");coll("recipes","recipes");coll("people","people");
   db.doc("settings/main").onSnapshot(snap=>{if(snap.exists)S.settings=snap.data();done("settings",snap);if(S.tab!=="rules")render()},fail);
   db.doc("plans/current").onSnapshot(snap=>{S.plan=snap.exists?snap.data():null;done("plans",snap);if(S.tab==="week")render()},fail);
